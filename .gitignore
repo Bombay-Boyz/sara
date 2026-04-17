@@ -122,4 +122,11 @@ cabal.project.local~
 /tmp/
 /coverage/
 
+
+
+# Root build
 _build/
+
+# Test site build artifacts
+test-site/_build/
+test-site/_site/
