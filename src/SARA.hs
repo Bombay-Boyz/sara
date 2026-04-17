@@ -17,7 +17,6 @@ import SARA.Types
 import SARA.Config
 import SARA.Error
 import SARA.Monad (SaraM(..), SaraEnv(..), RuleDecl(..))
-import SARA.Security.PathGuard (mkProjectRoot)
 import SARA.Security.ShellGuard (validateArg)
 import SARA.Internal.Engine (runBuild)
 import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
@@ -77,7 +76,7 @@ saraWithClients mClients m = do
       mapM_ (TIO.putStrLn . renderAnyErrorColor) errs
       exitFailure
     Right () -> do
-      rules <- reverse <$> readIORef rulesRef
+      rules <- readIORef rulesRef
       
       let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
       let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }

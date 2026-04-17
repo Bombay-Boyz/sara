@@ -58,9 +58,15 @@ renderTemplate tplPath ctx = do
   tpl <- case Map.lookup tplPath cache of
     Just t -> return t
     Nothing -> do
+      -- Double-checked pattern: multiple threads might reach here, 
+      -- but compileMustacheFile is idempotent for our purposes.
+      -- To be truly robust, we could use an MVar per template, but that's overkill.
+      -- We'll just ensure we don't overwrite a newer entry if someone else finished first.
       res <- liftIO $ Mustache.compileMustacheFile tplPath
-      liftIO $ atomicModifyIORef' templateCache (\c -> (Map.insert tplPath res c, ()))
-      return res
+      liftIO $ atomicModifyIORef' templateCache $ \c -> 
+        case Map.lookup tplPath c of
+          Just existing -> (c, existing)
+          Nothing -> (Map.insert tplPath res c, res)
       
   let result = TL.toStrict $ Mustache.renderMustache tpl ctx
   pure $ Right result

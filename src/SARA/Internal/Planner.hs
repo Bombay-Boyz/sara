@@ -14,14 +14,14 @@ import Development.Shake
 import Development.Shake.Classes
 import Development.Shake.FilePath
 import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..))
-import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), ValidationState(..), FeedConfig(..), Route(..))
+import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..))
 import SARA.Config (SaraConfig(..))
 import SARA.Security.PathGuard (guardPath, unSafePath)
 import SARA.Security.ShellGuard (validatePath)
 import SARA.Security.GlobGuard (unGlobPattern)
-import SARA.Template.Renderer (renderTemplate, addTemplateOracle)
-import SARA.Internal.Hash (needBlake3, askLQIP, addBlake3Oracle, addLQIPOracle, addDataOracle)
-import SARA.Error (AnySaraError(..), renderAnyErrorColor, SaraError(..), SaraErrorKind(..))
+import SARA.Template.Renderer (renderTemplate)
+import SARA.Internal.Hash (needBlake3, askLQIP)
+import SARA.Error (AnySaraError(..), renderAnyErrorColor)
 import SARA.SEO.Audit (auditRenderedHTML, AuditResult(..))
 import SARA.Validator.LinkChecker (checkInternalLinks)
 import SARA.Asset.Discover (inferAssetKind)
@@ -31,8 +31,6 @@ import SARA.SEO.Sitemap (generateSitemap)
 import SARA.SEO.Feed (generateRSS)
 
 import GHC.Generics (Generic)
-import qualified BLAKE3
-import qualified Data.ByteString as BS
 import Control.Monad (forM_, void)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Except (runExceptT)
@@ -90,7 +88,7 @@ translateDecl env = \case
   RuleSitemap o ps     -> genSitemap env o ps
   RuleRSS o cfg ps     -> genRSS env o cfg ps
   RuleDataDependency p -> genDataDependency env p
-  RuleGlobal globalAction -> genGlobal env globalAction
+  RuleGlobal _         -> return ()
 
 genMatch :: SaraEnv -> GlobPattern -> (FilePath -> SaraM (Item 'Validated)) -> Rules ()
 genMatch _ _ _ = return () -- No-op: match logic already executed in DSL phase to collect rules.
@@ -207,11 +205,11 @@ injectLQIPs html = do
 
 findLQIPTokens :: Text -> [Text]
 findLQIPTokens t = 
-  let (_, match) = T.breakOn "__LQIP__:" t
-  in if T.null match
+  let (beforeMatch, matchFound) = T.breakOn "__LQIP__:" t
+  in if T.null matchFound
      then []
      else 
-       let rest = T.drop 9 match
+       let rest = T.drop 9 matchFound
            (path, after) = T.breakOn "__" rest
        in path : findLQIPTokens (T.drop 2 after)
 
@@ -248,9 +246,9 @@ genSitemap env outPath items = do
   liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
   
   fullOutPath %> \o -> do
-    let sources = map itemPath items
-    need sources
-    generateSitemap (cfgSiteUrl (envConfig env)) items o
+    -- During execution, load real items
+    realItems <- mapM (askItem env . itemPath) items
+    generateSitemap (cfgSiteUrl (envConfig env)) realItems o
 
 genRSS :: SaraEnv -> FilePath -> FeedConfig -> [Item 'Validated] -> Rules ()
 genRSS env outPath cfg items = do
@@ -259,27 +257,12 @@ genRSS env outPath cfg items = do
   liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
   
   fullOutPath %> \o -> do
-    let sources = map itemPath items
-    need sources
-    generateRSS cfg items o
+    -- During execution, load real items
+    realItems <- mapM (askItem env . itemPath) items
+    generateRSS cfg realItems o
 
 genDataDependency :: SaraEnv -> FilePath -> Rules ()
-genDataDependency _ path = do
-  -- We don't have a specific output for a data dependency, 
-  -- but any rule that uses the data will implicitly depend on it via the oracle.
-  -- To ensure 'loadData' files are tracked even if not used in a compiler,
-  -- we can create a dummy rule or just rely on the oracle.
-  -- Actually, the best way to ENSURE Shake knows about it is to 'need' it in a common rule.
-  -- But we'll just rely on the oracle for now as it's cleaner.
-  return ()
-
-genGlobal :: SaraEnv -> SaraM () -> Rules ()
-genGlobal env globalAction = do
-  liftIO (runExceptT $ runReaderT (unSaraM globalAction) env) >>= \case
-    Left errs -> liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) errs
-    Right () -> do
-      rules <- liftIO $ readIORef (envRules env)
-      mapM_ (translateDecl env) rules
+genDataDependency _ path = action $ need [path]
 
 -- | Load a single item by its source path. Uses a cache and an Oracle for dependency tracking.
 askItem :: SaraEnv -> FilePath -> Action (Item 'Validated)

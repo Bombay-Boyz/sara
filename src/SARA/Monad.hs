@@ -7,10 +7,10 @@ module SARA.Monad
   , SaraEnv(..)
   , RuleDecl(..)
   , SiteGraph
+  , tellRule
   ) where
 
 import Control.Monad.Reader (ReaderT, MonadReader, asks)
-import Control.Monad.Writer (MonadWriter(..))
 import Control.Monad.Except (ExceptT, MonadError)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Aeson as Aeson
@@ -30,12 +30,11 @@ newtype SaraM a = SaraM
   { unSaraM :: ReaderT SaraEnv (ExceptT [AnySaraError] IO) a
   } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv, MonadError [AnySaraError])
 
-instance MonadWriter [RuleDecl] SaraM where
-  tell ds = do
-    ref <- asks envRules
-    liftIO $ atomicModifyIORef' ref (\rules -> (reverse ds ++ rules, ()))
-  listen = error "listen not implemented for SaraM"
-  pass = error "pass not implemented for SaraM"
+-- | Register a rule in the SARA environment.
+tellRule :: RuleDecl -> SaraM ()
+tellRule d = do
+  ref <- asks envRules
+  liftIO $ atomicModifyIORef' ref (\rules -> (rules ++ [d], ()))
 
 data SaraEnv = SaraEnv
   { envConfig     :: !SaraConfig

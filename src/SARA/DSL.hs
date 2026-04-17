@@ -22,9 +22,8 @@ module SARA.DSL
   ) where
 
 import SARA.Types
-import SARA.Config
-import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..))
-import SARA.Error (SaraError(..), AnySaraError(..))
+import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), tellRule)
+import SARA.Error (SaraError(..), AnySaraError(..), renderAnyErrorColor)
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
 import qualified SARA.Frontmatter.Remap as Remap
@@ -32,10 +31,8 @@ import SARA.Asset.Discover (discoverAssets)
 import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
-import Control.Monad.Writer (tell)
 import Control.Monad.Reader (ask)
 import Control.Monad.Except (throwError)
-import Data.Aeson (KeyValue(..), object)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
@@ -45,10 +42,10 @@ import qualified BLAKE3
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Yaml as Yaml
 import System.FilePath (takeExtension, replaceExtension)
 import qualified SARA.Routing.Engine as REngine
-import SARA.Internal.Hash (askData)
 
 -- | Match source files by glob and run logic for each.
 match
@@ -59,7 +56,7 @@ match g f = do
   let patStr = T.unpack (unGlobPattern g)
   files <- liftIO $ globDir1 (compile patStr) "."
   items <- mapM f files
-  tell [RuleMatch g f]
+  tellRule (RuleMatch g f)
   return items
 
 -- | Auto-discover and copy/process assets.
@@ -68,7 +65,11 @@ discover = discoverAssets
 
 -- | Explicitly assign a route to an item.
 route :: Route 'Abstract -> Item 'Validated -> SaraM (Item 'Validated)
-route r item = return $ item { itemRoute = ResolvedRoute "TODO_RESOLVE" } -- Placeholder
+route r item = do
+  res <- liftIO $ REngine.resolveRoute r (itemPath item)
+  case res of
+    Right resolved -> return $ item { itemRoute = resolved }
+    Left err -> throwError [AnySaraError err]
 
 -- | Read a Markdown file into an Item.
 readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
@@ -146,44 +147,53 @@ validateSEO item = do
           , itemHash = itemHash item
           }
         (Nothing, _) -> throwError [AnySaraError $ SEOTitleMissing (itemPath item)]
-        (_, Nothing) -> throwError [AnySaraError $ SEODescriptionMissing (itemPath item)]
+        (_, Nothing) -> do
+          -- Return as a warning instead of a hard error
+          liftIO $ TIO.putStrLn $ renderAnyErrorColor $ AnySaraError $ SEODescriptionMissing (itemPath item)
+          return $ Item
+            { itemPath = itemPath item
+            , itemRoute = itemRoute item
+            , itemMeta = itemMeta item
+            , itemBody = itemBody item
+            , itemHash = itemHash item
+            }
 
 -- | Render an Item through a template.
 render :: FilePath -> Item 'Validated -> SaraM ()
 render tpl item = do
   let outPath = case itemRoute item of
                   ResolvedRoute p -> p
-  tell [RuleRender tpl item outPath]
+  tellRule (RuleRender tpl item outPath)
 
 -- | Render an Item using a custom Haskell-based renderer.
 renderWith :: (Item 'Validated -> Text) -> Item 'Validated -> SaraM ()
 renderWith renderer item = do
   let outPath = case itemRoute item of
                   ResolvedRoute p -> p
-  tell [RuleRenderRaw (renderer item) item outPath]
+  tellRule (RuleRenderRaw (renderer item) item outPath)
 
 -- | Register metadata remapping rules.
 remapMetadata :: [(Text, Text)] -> SaraM ()
-remapMetadata rules = tell [RuleRemap rules]
+remapMetadata rules = tellRule (RuleRemap rules)
 
 -- | Register a search index generation rule.
 buildSearchIndex :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSearchIndex outPath ps = tell [RuleSearch outPath ps]
+buildSearchIndex outPath ps = tellRule (RuleSearch outPath ps)
 
 -- | Register a sitemap.xml generation rule.
 buildSitemap :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSitemap outPath ps = tell [RuleSitemap outPath ps]
+buildSitemap outPath ps = tellRule (RuleSitemap outPath ps)
 
 -- | Register an RSS feed generation rule.
 buildRSS :: FilePath -> FeedConfig -> [Item 'Validated] -> SaraM ()
-buildRSS outPath cfg ps = tell [RuleRSS outPath cfg ps]
+buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps)
 
 -- | Loads structured data (JSON or YAML) from a file.
 --   Automatically tracks dependencies in Shake.
 loadData :: FilePath -> SaraM Aeson.Value
 loadData path = do
   -- 1. Tell Shake to track this file as a dependency.
-  tell [RuleDataDependency path]
+  tellRule (RuleDataDependency path)
   
   -- 2. Read the file NOW (planning) to allow the DSL to use the data.
   content <- liftIO $ BS.readFile path

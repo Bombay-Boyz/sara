@@ -44,8 +44,8 @@ spec = do
           createDirectoryIfMissing True "templates"
           TIO.writeFile "templates/post.html" "<html><head><title>Industrial Stress Test</title></head><body>{{{itemBody}}}</body></html>"
           
-          -- Fix: ensure we use a known output directory
-          TIO.writeFile "sara.yaml" "outputDirectory: _site"
+          -- Fix: use the correct config key 'outputDir'
+          TIO.writeFile "sara.yaml" "outputDir: _site"
           
           sara $ do
             _ <- match (glob "posts/*.md") $ \file -> do
@@ -58,7 +58,12 @@ spec = do
           -- Verification: Check that at least one file was generated
           allFiles <- listFilesRecursive tmpDir
           let generated = filter (L.isInfixOf "post-1.html") allFiles
-          not (null generated) `shouldBe` True
+          if null generated
+            then do
+              putStrLn "DEBUG: Generated files:"
+              mapM_ putStrLn allFiles
+              expectationFailure "No post-1.html found in output"
+            else return ()
         
         True `shouldBe` True
 

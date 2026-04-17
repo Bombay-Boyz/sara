@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 
 module SARA.Config
   ( SaraConfig(..)
@@ -11,7 +12,7 @@ module SARA.Config
 
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import Data.Aeson (FromJSON)
+import Data.Aeson (FromJSON(..), genericParseJSON, defaultOptions, fieldLabelModifier)
 import qualified Data.Yaml as Yaml
 import SARA.Security.PathGuard (ProjectRoot, mkProjectRoot)
 import System.Directory (doesFileExist)
@@ -26,7 +27,17 @@ data SaraConfig = SaraConfig
   , cfgDryRun          :: !Bool
   } deriving (Show, Eq, Generic)
 
-instance FromJSON SaraConfig
+instance FromJSON SaraConfig where
+  parseJSON = genericParseJSON defaultOptions
+    { fieldLabelModifier = \case
+        "cfgSiteTitle"       -> "title"
+        "cfgSiteUrl"         -> "baseUrl"
+        "cfgSiteAuthor"      -> "author"
+        "cfgDefaultTemplate" -> "defaultTemplate"
+        "cfgOutputDirectory" -> "outputDir"
+        "cfgDryRun"          -> "dryRun"
+        other                -> other
+    }
 
 defaultConfig :: SaraConfig
 defaultConfig = SaraConfig
