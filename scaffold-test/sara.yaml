@@ -1,0 +1,5 @@
+title: Scaffold Site
+author: Tester
+baseUrl: /
+outputDir: _site
+defaultTemplate: templates/default.html

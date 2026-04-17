@@ -1,0 +1,123 @@
+########################################
+# Haskell Build Tools
+########################################
+
+# Stack
+.stack-work/
+
+# Cabal v2 (new-build)
+dist-newstyle/
+
+# Cabal v1 (legacy)
+dist/
+
+# Cabal sandbox (very old)
+cabal.sandbox.config
+.cabal-sandbox/
+
+########################################
+# GHC Artifacts
+########################################
+
+# Object/interface files
+*.o
+*.hi
+*.chi
+
+# Shared libs
+*.dyn_o
+*.dyn_hi
+*.so
+*.dll
+*.dylib
+
+# Executables (optional; comment out if you want to commit binaries)
+*.exe
+*.out
+
+# GHC environment files
+.ghc.environment.*
+
+########################################
+# Profiling / Benchmarking
+########################################
+
+*.prof
+*.aux
+*.hp
+*.eventlog
+
+########################################
+# HPC (Coverage)
+########################################
+
+*.tix
+*.mix
+hpc/
+
+########################################
+# Logs
+########################################
+
+*.log
+
+########################################
+# Temporary / Backup
+########################################
+
+*~
+*.swp
+*.swo
+*.tmp
+
+########################################
+# OS Files
+########################################
+
+.DS_Store
+Thumbs.db
+
+########################################
+# Editor / IDE
+########################################
+
+# VS Code
+.vscode/
+
+# IntelliJ / Haskell plugin
+.idea/
+
+# Emacs
+*.elc
+auto-save-list/
+tramp
+
+# Vim
+*.un~
+
+########################################
+# Nix (if used)
+########################################
+
+result
+result-*
+.nix-*
+.direnv/
+
+########################################
+# Misc
+########################################
+
+# HLint cache
+.hlint.yaml
+
+# Cabal local config (machine-specific)
+cabal.project.local
+cabal.project.local~
+
+########################################
+# Optional: Ignore test/build outputs
+########################################
+
+/tmp/
+/coverage/
