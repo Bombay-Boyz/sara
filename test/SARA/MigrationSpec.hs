@@ -21,6 +21,5 @@ spec = do
 
     it "translates link tags" $ do
       let input = "[link]({% link _posts/page.md %})"
-      let expected = "[link]([link](_posts/page.md))" 
-      -- Note: link translation might need more work but this confirms it acts
+      let expected = "[link](_posts/page.md)" 
       translateJekyllShortcodes "test.md" input `shouldBe` Right expected

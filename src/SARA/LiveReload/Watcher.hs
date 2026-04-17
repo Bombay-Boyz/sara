@@ -27,11 +27,9 @@ watchProject root onEvent = do
   withManager $ \mgr -> do
     putStrLn $ "Watching " ++ root ++ " for changes..."
     -- Watch recursively
-    _ <- watchTree mgr root (filterEvents) $ \event -> do
-      -- Filter out events inside _site or _build
-      when (filterEvents event) $ do
-        putStrLn $ "Change detected: " ++ show event
-        void $ tryPutMVar debounceMVar ()
+    _ <- watchTree mgr root filterEvents $ \event -> do
+      putStrLn $ "Change detected: " ++ show event
+      void $ tryPutMVar debounceMVar ()
     
     forever $ threadDelay 1000000
 

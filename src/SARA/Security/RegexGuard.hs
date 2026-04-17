@@ -9,16 +9,16 @@ import qualified Data.Text as T
 import SARA.Types (SafeRegex(..))
 import SARA.Error (SaraError(..), SaraErrorKind(..))
 import Text.Regex.PCRE.Text (compile, compBlank, execBlank)
-import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.List as L
 
 -- | Smart constructor for SafeRegex.
-mkSafeRegex :: Text -> Either (SaraError 'EKSecurity) SafeRegex
+mkSafeRegex :: Text -> IO (Either (SaraError 'EKSecurity) SafeRegex)
 mkSafeRegex t = do
   -- 1. Compilation check
-  case unsafePerformIO $ compile compBlank execBlank t of
-    Left (_, err) -> Left $ SecurityRegexReDoS t (T.pack err)
-    Right _ -> do
+  res <- compile compBlank execBlank t
+  case res of
+    Left (_, err) -> return $ Left $ SecurityRegexReDoS t (T.pack err)
+    Right _ -> return $ 
       -- 2. Structural complexity check (Heuristic)
       checkComplexity t
 
@@ -61,17 +61,39 @@ allSplits :: [a] -> [([a], [a])]
 allSplits xs = [splitAt i xs | i <- [0..length xs]]
 
 hasAlternationInRepetition :: String -> Bool
-hasAlternationInRepetition s = "|" `L.isInfixOf` s && ")+" `L.isInfixOf` s
+hasAlternationInRepetition s = go s (0 :: Int) False
+  where
+    -- go string currentDepth hasAlternationAtThisDepth
+    go :: String -> Int -> Bool -> Bool
+    go [] _ _ = False
+    go (c:cs) depth hasAlt
+      | c == '(' = go cs (depth + 1) False || go cs depth hasAlt
+      | c == ')' = 
+          let isRepetition = not (null cs) && (head cs == '+' || head cs == '*')
+          in (hasAlt && isRepetition) || go cs (depth - 1) False
+      | c == '|' = (depth > 0) || go cs depth True
+      | otherwise = go cs depth hasAlt
 
 -- | Calculates nesting depth of quantifiers (specifically groups followed by + or *).
 exceedsNestingDepth :: String -> Int -> Bool
-exceedsNestingDepth s limit = go s 0 0
+exceedsNestingDepth s limit = go s (0 :: Int) (0 :: Int)
   where
     go [] _ maxDepth = maxDepth > limit
     go (c:cs) currentDepth maxDepth
-      | c == '(' = go cs (currentDepth + 1) maxDepth
+      | c == '(' = 
+          let isQuantified = isNextQuantified cs (0 :: Int)
+          in if isQuantified
+             then go cs (currentDepth + 1) (max (currentDepth + 1) maxDepth)
+             else go cs currentDepth maxDepth
       | c == ')' = 
-          if not (null cs) && (head cs == '+' || head cs == '*')
-          then go cs (currentDepth - 1) (max (currentDepth) maxDepth)
-          else go cs (currentDepth - 1) maxDepth
+          if currentDepth > 0 then go cs (currentDepth - 1) maxDepth else go cs 0 maxDepth
       | otherwise = go cs currentDepth maxDepth
+
+    isNextQuantified :: String -> Int -> Bool
+    isNextQuantified [] _ = False
+    isNextQuantified (x:xs) d
+      | x == '(' = isNextQuantified xs (d + 1)
+      | x == ')' = if d == 0 
+                   then not (null xs) && (head xs == '+' || head xs == '*')
+                   else isNextQuantified xs (d - 1)
+      | otherwise = isNextQuantified xs d

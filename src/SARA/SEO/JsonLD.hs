@@ -14,6 +14,8 @@ import qualified Data.Aeson.Key as K
 import SARA.Config (SaraConfig(..))
 import GHC.Generics (Generic)
 
+import Data.Function ((&))
+
 data SchemaType = SchemaArticle | SchemaWebSite | SchemaWebPage
   deriving (Eq, Show)
 
@@ -32,7 +34,7 @@ generateJsonLD stype meta config =
         SchemaArticle -> KM.fromList
           [ ("headline", maybe (Aeson.String "Untitled") id (KM.lookup (K.fromText "title") meta))
           , ("author", KM.lookup (K.fromText "author") meta 
-                       |> maybe (Aeson.String (cfgSiteAuthor config)) id)
+                       & maybe (Aeson.String (cfgSiteAuthor config)) id)
           , ("datePublished", maybe Aeson.Null id (KM.lookup (K.fromText "date") meta))
           ]
         _ -> KM.empty
@@ -44,6 +46,3 @@ typeToText = \case
   SchemaWebSite -> "WebSite"
   SchemaWebPage -> "WebPage"
 
-(|>) :: a -> (a -> b) -> b
-x |> f = f x
-infixl 0 |>

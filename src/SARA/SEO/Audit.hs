@@ -40,13 +40,15 @@ checkHeadingHierarchy :: FilePath -> [Tag Text] -> [AnySaraError]
 checkHeadingHierarchy path tags =
   let headings = [ h | t <- tags
                      , let name = getTagName t
-                     , T.length name == 2 
+                     , not (T.null name)
                      , T.head name == 'h' 
                      , Just h <- [readMaybe (T.unpack $ T.drop 1 name) :: Maybe Int]
                      ]
       go [] _ = []
       go (h:hs) prev =
-        if h > prev + 1
+        -- A skip occurs if the next heading is more than 1 level deeper than the previous one.
+        -- Starting with prev=0, h1 and h2 are okay, h3+ is a skip.
+        if (prev == 0 && h > 2) || (prev > 0 && h > prev + 1)
         then AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h) : go hs h
         else go hs h
   in go headings 0
@@ -81,7 +83,11 @@ generateAuditReport results outPath = do
     renderResult (AuditIssues path issues) = T.unlines $
       [ "<div class='issue'>"
       , "<div class='file'>File: " <> T.pack path <> "</div>"
-      ] ++ map (\e -> "<div class='error'>" <> renderAnyErrorColor e <> "</div>") issues ++ ["</div>"]
+      ] ++ map (\e -> "<div class='error'>" <> renderAnyErrorPlain e <> "</div>") issues ++ ["</div>"]
+
+-- | Renders an error without ANSI color codes for HTML.
+renderAnyErrorPlain :: AnySaraError -> Text
+renderAnyErrorPlain (AnySaraError e) = T.pack (show e)
 
 getTagName :: Tag Text -> Text
 getTagName (TagOpen name _) = name

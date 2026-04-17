@@ -98,7 +98,7 @@ data SomeAssetKind where
 deriving instance Show SomeAssetKind
 
 -- | Opaque newtype for validated glob patterns.
-newtype GlobPattern = GlobPattern Text
+newtype GlobPattern = GlobPattern { unGlobPattern :: Text }
   deriving (Eq, Show)
 
 -- | Configuration for RSS/Atom feeds.

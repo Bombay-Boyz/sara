@@ -1,42 +1,32 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 
 module SARA.EnhancedFeaturesSpec (spec) where
 
 import Test.Hspec
 import SARA
-import SARA.Monad
-import SARA.Search.Index
-import SARA.Migration.Scaffold
-import qualified Data.Text as T
+import SARA.Monad (SaraEnv(..), RuleDecl(..), SaraM(..))
+import SARA.Config (defaultConfig, cfgOutputDirectory)
+import SARA.Security.PathGuard (mkProjectRoot)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
-import System.IO.Temp (withSystemTempDirectory)
-import System.FilePath ((</>))
-import Data.IORef
 import qualified Data.HashSet as HS
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Control.Monad.Writer (runWriterT)
+import Data.IORef
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Except (runExceptT)
-import Control.Monad (void)
-import qualified BLAKE3
-import qualified Data.ByteString as BS
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
+import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
 
 spec :: Spec
 spec = do
-  describe "SARA Enhanced Features" $ do
-    
-    it "verifies Inverted Index generation logic" $ do
-      let dummyHash = BLAKE3.hash Nothing ([] :: [BS.ByteString])
-      let (e1, c1) = mkSearchEntry (Item "posts/1.md" (ResolvedRoute "url1") KM.empty "Content one" dummyHash)
-      seUrl e1 `shouldBe` "url1"
-      c1 `shouldBe` "Content one"
-
-    it "verifies Global Metadata Remapping across the DSL passes" $ do
-      withSystemTempDirectory "sara-metadata-test" $ \tmpDir -> do
+  describe "Enhanced Industrial Features" $ do
+    it "remaps metadata correctly across two phases" $ do
+      withSystemTempDirectory "sara-remap-test" $ \tmpDir -> do
         let postsDir = tmpDir </> "posts"
         createDirectoryIfMissing True postsDir
         -- remapMetadata RENAMES a key, so the key must exist
@@ -44,6 +34,10 @@ spec = do
         
         graphRef <- newIORef HS.empty
         errorRef <- newIORef False
+        rulesRef <- newIORef []
+        itemCacheRef <- newIORef Map.empty
+        dataCacheRef <- newIORef Map.empty
+        
         let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
         root <- mkProjectRoot tmpDir
         
@@ -53,19 +47,20 @@ spec = do
                 item <- readMarkdown file
                 validateSEO item
 
-        -- Step 1: Pass 1
-        let initialEnv = SaraEnv config root graphRef [] errorRef
-        resPass1 <- runExceptT $ runWriterT $ runReaderT (unSaraM dsl) initialEnv
+        -- Step 1: Pass 1 (Planning)
+        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef
+        resPass1 <- runExceptT $ runReaderT (unSaraM dsl) initialEnv
         case resPass1 of
-          Right ((), rules) -> do
+          Right () -> do
+            rules <- readIORef rulesRef
             let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
             allRemapRules `shouldContain` [("fromKey", "toKey")]
             
-            -- Step 2: Pass 2 (simulate build behavior)
-            let finalEnv = initialEnv { envRemapRules = allRemapRules }
-            resPass2 <- runExceptT $ runWriterT $ runReaderT (unSaraM (readMarkdown (postsDir </> "test.md"))) finalEnv
+            -- Step 2: Pass 2 (Execution - simulate build behavior)
+            let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
+            resPass2 <- runExceptT $ runReaderT (unSaraM (readMarkdown (postsDir </> "test.md"))) finalEnv
             case resPass2 of
-              Right (item, _) -> do
+              Right item -> do
                 KM.lookup "toKey" (itemMeta item) `shouldBe` Just (Aeson.String "someValue")
                 KM.member "fromKey" (itemMeta item) `shouldBe` False
               Left e -> expectationFailure $ "Read markdown failed: " ++ show e

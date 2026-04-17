@@ -9,13 +9,15 @@ module SARA.Monad
   , SiteGraph
   ) where
 
-import Control.Monad.Reader (ReaderT, MonadReader)
-import Control.Monad.Writer (WriterT, MonadWriter)
+import Control.Monad.Reader (ReaderT, MonadReader, asks)
+import Control.Monad.Writer (MonadWriter(..))
 import Control.Monad.Except (ExceptT, MonadError)
-import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import qualified Data.Aeson as Aeson
 import Data.Text (Text)
-import Data.IORef (IORef)
+import Data.IORef (IORef, atomicModifyIORef')
 import Data.HashSet (HashSet)
+import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError)
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig)
@@ -25,8 +27,15 @@ type SiteGraph = HashSet FilePath
 
 -- | The SARA monad stack for rule declaration.
 newtype SaraM a = SaraM
-  { unSaraM :: ReaderT SaraEnv (WriterT [RuleDecl] (ExceptT [AnySaraError] IO)) a
-  } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv, MonadWriter [RuleDecl], MonadError [AnySaraError])
+  { unSaraM :: ReaderT SaraEnv (ExceptT [AnySaraError] IO) a
+  } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv, MonadError [AnySaraError])
+
+instance MonadWriter [RuleDecl] SaraM where
+  tell ds = do
+    ref <- asks envRules
+    liftIO $ atomicModifyIORef' ref (\rules -> (reverse ds ++ rules, ()))
+  listen = error "listen not implemented for SaraM"
+  pass = error "pass not implemented for SaraM"
 
 data SaraEnv = SaraEnv
   { envConfig     :: !SaraConfig
@@ -34,11 +43,16 @@ data SaraEnv = SaraEnv
   , envSiteGraph  :: !(IORef SiteGraph)
   , envRemapRules :: ![(Text, Text)]
   , envHasErrors  :: !(IORef Bool)
+  , envRules      :: !(IORef [RuleDecl])
+  , envIsPlanning :: !Bool
+  , envItemCache  :: !(IORef (Map.Map FilePath (Item 'Validated)))
+  , envDataCache  :: !(IORef (Map.Map FilePath Aeson.Value))
   }
+
 
 -- | Declarations produced by the DSL.
 data RuleDecl
-  = RuleMatch    !GlobPattern !(FilePath -> SaraM ())
+  = RuleMatch    !GlobPattern !(FilePath -> SaraM (Item 'Validated))
   | RuleDiscover !GlobPattern
   | RuleRender   !FilePath !(Item 'Validated) !FilePath
   | RuleRenderRaw !Text !(Item 'Validated) !FilePath
@@ -47,4 +61,5 @@ data RuleDecl
   | RulePartialSearch !FilePath !(Item 'Validated)
   | RuleSitemap  !FilePath ![Item 'Validated]
   | RuleRSS      !FilePath !FeedConfig ![Item 'Validated]
+  | RuleDataDependency !FilePath
   | RuleGlobal   !(SaraM ())

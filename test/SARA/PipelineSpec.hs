@@ -27,8 +27,8 @@ spec = do
         Left err -> expectationFailure $ "Parse failed: " ++ show err
         Right (meta, _) -> do
           -- 3. Routing phase
-          let routed = resolveRoute SlugRoute "test.md"
-          case routed of
+          res <- resolveRoute SlugRoute "test.md"
+          case res of
             Left err -> expectationFailure $ "Routing failed: " ++ show err
             Right (ResolvedRoute outPath) -> do
               outPath `shouldBe` "test.html"

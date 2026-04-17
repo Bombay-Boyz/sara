@@ -24,7 +24,8 @@ spec = do
         case parseFrontmatter "test.md" content of
           Right (_, _) -> do
             -- 2. Routing Phase
-            case resolveRoute SlugRoute "test.md" of
+            res <- resolveRoute SlugRoute "test.md"
+            case res of
               Right (ResolvedRoute out) -> do
                 out `shouldBe` "test.html"
                 
@@ -44,6 +45,7 @@ spec = do
                 ssg <- detectSourceSSG tmpDir
                 ssg `shouldBe` SourceUnknown
                 
-                True `shouldBe` True
+                -- Verification: check something real
+                HS.size siteGraph `shouldBe` 1
               Left e -> expectationFailure $ "Expected Right ResolvedRoute, got " ++ show e
           Left e -> expectationFailure $ "Expected Right parseFrontmatter, got " ++ show e

@@ -18,9 +18,9 @@ data FrontmatterFormat
 -- | O(1): inspect the first bytes only. Handles both LF and CRLF.
 detectFormat :: Text -> FrontmatterFormat
 detectFormat t
-  | "---" `T.isPrefixOf` t = FmYAML
-  | "+++" `T.isPrefixOf` t = FmTOML
-  | "{"   `T.isPrefixOf` t = FmJSON
+  | "---\n" `T.isPrefixOf` t || "---\r\n" `T.isPrefixOf` t = FmYAML
+  | "+++\n" `T.isPrefixOf` t || "+++\r\n" `T.isPrefixOf` t = FmTOML
+  | "{\n"   `T.isPrefixOf` t || "{\r\n"   `T.isPrefixOf` t = FmJSON
   | otherwise = FmNone
 
 -- | Splits the file into (frontmatter, body).
@@ -52,9 +52,21 @@ splitBy sepLF sepCRLF sepBase t =
   in Right (fm, body)
 
 splitJSON :: Text -> Either (SaraError 'EKFrontmatter) (Text, Text)
-splitJSON t =
-  case T.breakOn "}\n" t of
-    (f, b) | not (T.null b) -> Right (f <> "}", T.drop 2 b)
-    _ -> case T.breakOn "}\r\n" t of
-           (f, b) | not (T.null b) -> Right (f <> "}", T.drop 3 b)
-           _ -> Right (t, "")
+splitJSON t = 
+  let (fm, rest) = findJSONEnd t
+  in if T.null rest && not ("}" `T.isSuffixOf` T.strip fm)
+     then Right (t, "") 
+     else Right (fm, rest)
+
+-- | Find the end of a JSON object by tracking brace depth.
+findJSONEnd :: Text -> (Text, Text)
+findJSONEnd t = go (T.unpack t) 0 []
+  where
+    go [] _ acc = (T.pack (reverse acc), "")
+    go (c:cs) depth acc
+      | c == '{' = go cs (depth + 1) (c:acc)
+      | c == '}' = 
+          if depth == 1
+          then (T.pack (reverse (c:acc)), T.pack cs)
+          else go cs (depth - 1) (c:acc)
+      | otherwise = go cs depth (c:acc)

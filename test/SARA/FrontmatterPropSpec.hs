@@ -11,22 +11,24 @@ import qualified Data.Yaml as Yaml
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
+import SARA.Security.HtmlEscape (escapeHtmlValue)
+
 -- | Property: Parsing and re-encoding simple YAML should be an isomorphism.
--- Restricted to alphanumeric to avoid HTML-escape mismatch.
+--   Now includes special characters to verify HTML escaping.
 prop_yaml_roundtrip :: [(String, String)] -> Property
 prop_yaml_roundtrip pairs =
-  let cleanPairs = filter (\(k, v) -> all isAlphaNum k && all isAlphaNum v && not (null k)) pairs
+  let cleanPairs = filter (\(k, _) -> not (null k) && all (`notElem` (":\n" :: String)) k) pairs
       obj = Aeson.object [ Key.fromString k Aeson..= v | (k, v) <- cleanPairs ]
+      -- We expect the parser to HTML-escape values
+      expected = escapeHtmlValue obj
       raw = T.decodeUtf8 (Yaml.encode obj)
       content = T.pack "---\n" <> raw <> T.pack "---\n"
   in case parseFrontmatter "test.md" content of
-       Right (meta, _) -> Aeson.toJSON meta === Aeson.toJSON obj
+       Right (meta, _) -> Aeson.toJSON meta === Aeson.toJSON expected
        Left _          -> property False
-  where
-    isAlphaNum c = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 
 spec :: Spec
 spec = do
   describe "SARA Frontmatter Properties" $ do
-    it "YAML roundtrip is an isomorphism for simple objects" $
+    it "YAML roundtrip is an isomorphism for simple objects (including special chars)" $
       property prop_yaml_roundtrip

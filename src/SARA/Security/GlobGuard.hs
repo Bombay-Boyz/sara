@@ -21,7 +21,3 @@ mkGlobPattern t =
         || isAbsolute s
      then Left $ SecurityGlobEscape t "Path escapes project root or is absolute"
      else Right $ GlobPattern t
-
--- | Unwrap.
-unGlobPattern :: GlobPattern -> Text
-unGlobPattern (GlobPattern t) = t

@@ -22,43 +22,45 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import SARA.Template.Error
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
+import Data.IORef
+import System.IO.Unsafe (unsafePerformIO)
+import qualified Data.Map.Strict as Map
 
 newtype TemplateOracle = TemplateOracle FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Generic)
 
--- | We must store a serializable version in the Oracle result.
---   Mustache.Template is not easily serializable/NFData.
---   So we store the FilePath and depend on it.
 type instance RuleResult TemplateOracle = FilePath
+
+-- | Global cache for compiled templates.
+--   Justified because it's a pure cache of immutable-once-loaded data.
+{-# NOINLINE templateCache #-}
+templateCache :: IORef (Map.Map FilePath Mustache.Template)
+templateCache = unsafePerformIO $ newIORef Map.empty
 
 addTemplateOracle :: Rules ()
 addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
-  -- 1. Read the template
+  need [path]
   content <- liftIO $ TIO.readFile path
-  
-  -- 2. Run security audit
   let auditErrors = auditTemplateForRawInterpolation path content
   case auditErrors of
-    [] -> do
-      -- 3. Just return the path if audit passed. 
-      -- We depend on the template file.
-      need [path]
-      pure path
-    errs -> do
-      error $ "Security audit failed for template " ++ path ++ ": " ++ show errs
+    [] -> pure path
+    errs -> fail $ "Security audit failed for template " ++ path ++ ": " ++ show errs
 
 renderTemplate
   :: FilePath
   -> Aeson.Value
   -> Action (Either TemplateError Text)
 renderTemplate tplPath ctx = do
-  -- This will trigger the oracle (audit)
   _ <- askOracle (TemplateOracle tplPath)
-  -- If we are here, audit passed.
-  -- stache has its own cache if we use the same tpl object, 
-  -- but here we are in a distributed/parallel build, 
-  -- so we compile in each rule (or we could use a better oracle).
-  -- For now, compile and render.
-  res <- liftIO $ Mustache.compileMustacheFile tplPath
-  let result = TL.toStrict $ Mustache.renderMustache res ctx
+  
+  -- Check cache first
+  cache <- liftIO $ readIORef templateCache
+  tpl <- case Map.lookup tplPath cache of
+    Just t -> return t
+    Nothing -> do
+      res <- liftIO $ Mustache.compileMustacheFile tplPath
+      liftIO $ atomicModifyIORef' templateCache (\c -> (Map.insert tplPath res c, ()))
+      return res
+      
+  let result = TL.toStrict $ Mustache.renderMustache tpl ctx
   pure $ Right result

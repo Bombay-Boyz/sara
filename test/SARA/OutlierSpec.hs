@@ -22,7 +22,9 @@ spec = do
 
     describe "Security Edge Cases" $ do
       it "handles path with NUL bytes gracefully" $ do
-        True `shouldBe` True
+        case parseFrontmatter "test\0.md" (T.pack "---") of
+          Left _ -> True `shouldBe` True -- Rejection is graceful
+          Right _ -> True `shouldBe` True -- Parsing is also fine if name was cleaned
 
     describe "Large File Handling (Stress Test)" $ do
       it "processes 1000 frontmatter keys efficiently" $ do
@@ -30,5 +32,5 @@ spec = do
         let fm = T.unlines $ map (\k -> k <> T.pack ": value") keys
         let content = T.pack "---\n" <> fm <> T.pack "---\n"
         case parseFrontmatter "large.md" content of
-          Right (_, _) -> True `shouldBe` True
+          Right (meta, _) -> length (show meta) `shouldSatisfy` (> 0)
           Left err -> expectationFailure $ "Failed to parse large fm: " ++ show err

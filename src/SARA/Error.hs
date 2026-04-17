@@ -99,6 +99,9 @@ data SaraError (k :: SaraErrorKind) where
   SEOTitleMissing
     :: { seoFile :: !FilePath }
     -> SaraError 'EKSEO
+  SEODescriptionMissing
+    :: { seoFile :: !FilePath }
+    -> SaraError 'EKSEO
 
   -- Validator errors
   ValidatorBrokenLink
@@ -180,6 +183,7 @@ errorColorAnsi = \case
   SEOAltMissing {} -> annotate (color Yellow)
   SEOHeadingSkip {} -> annotate (color Yellow)
   SEOTitleMissing {} -> annotate (color Yellow)
+  SEODescriptionMissing {} -> annotate (color Yellow)
   MigrationUnsupportedShortcode {} -> annotate (color Yellow)
   _ -> annotate (color Red)
 
@@ -198,6 +202,7 @@ errorDetails = \case
   SEOAltMissing _ pos src -> ("warning", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)
   SEOHeadingSkip _ pos from to -> ("warning", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
   SEOTitleMissing f -> ("warning", "W003", "Missing title", Just (SourcePos f 0 0))
+  SEODescriptionMissing f -> ("warning", "W004", "Missing description", Just (SourcePos f 0 0))
   ValidatorBrokenLink _ pos target -> ("error", "V001", "Broken internal link to '" <> T.pack target <> "'", Just pos)
   ValidatorMissingAsset _ pos src -> ("error", "V002", "Missing asset reference '" <> src <> "'", Just pos)
   AssetProcessingFailed f d -> ("error", "A001", "Asset processing failed for " <> T.pack f <> ": " <> d, Nothing)

@@ -7,11 +7,12 @@ import SARA
 import SARA.Frontmatter.Parser
 import System.IO.Temp (withSystemTempDirectory)
 import System.FilePath ((</>))
-import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory)
+import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory, doesFileExist, listDirectory, doesDirectoryExist)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, forM)
 import Control.Exception (finally)
+import qualified Data.List as L
 
 spec :: Spec
 spec = do
@@ -29,6 +30,7 @@ spec = do
           let content = T.unlines
                 [ "---"
                 , "title: Stress Post " <> T.pack (show i)
+                , "description: A stress test post"
                 , "author: Stress Tester"
                 , "---"
                 , "# Body " <> T.pack (show i)
@@ -41,12 +43,23 @@ spec = do
           setCurrentDirectory tmpDir
           createDirectoryIfMissing True "templates"
           TIO.writeFile "templates/post.html" "<html><head><title>Industrial Stress Test</title></head><body>{{{itemBody}}}</body></html>"
+          
+          -- Fix: ensure we use a known output directory
+          TIO.writeFile "sara.yaml" "outputDirectory: _site"
+          
           sara $ do
-            void $ match (glob "posts/*.md") $ \file -> do
+            _ <- match (glob "posts/*.md") $ \file -> do
               item <- readMarkdown file
               item' <- validateSEO item
               render "templates/post.html" item'
               pure item'
+            return ()
+        
+          -- Verification: Check that at least one file was generated
+          allFiles <- listFilesRecursive tmpDir
+          let generated = filter (L.isInfixOf "post-1.html") allFiles
+          not (null generated) `shouldBe` True
+        
         True `shouldBe` True
 
     it "handles very large Markdown files (5MB)" $ do
@@ -55,3 +68,13 @@ spec = do
       case parseFrontmatter "large.md" content of
         Right (_, b) -> T.length b `shouldSatisfy` (> 1000000)
         Left e -> expectationFailure $ "Large file parse failed: " ++ show e
+
+-- | Helper to list all files recursively for debugging.
+listFilesRecursive :: FilePath -> IO [FilePath]
+listFilesRecursive dir = do
+  names <- listDirectory dir
+  paths <- forM names $ \name -> do
+    let path = dir </> name
+    isDir <- doesDirectoryExist path
+    if isDir then listFilesRecursive path else return [path]
+  return (concat paths)

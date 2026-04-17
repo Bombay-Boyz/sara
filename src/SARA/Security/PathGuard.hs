@@ -3,7 +3,6 @@ module SARA.Security.PathGuard
   , SafePath(..)
   , mkProjectRoot
   , guardPath
-  , guardPathUnsafe
   ) where
 
 import System.Directory (canonicalizePath)
@@ -40,9 +39,3 @@ guardPath (ProjectRoot root) candidate =
      else if rootSegments `L.isPrefixOf` candSegments
           then Right (SafePath normCand)
           else Left $ SecurityPathTraversal "" candidate normRoot
-
--- | Internal use only; panics if called on an unsafe path.
-guardPathUnsafe :: ProjectRoot -> FilePath -> SafePath
-guardPathUnsafe root path = case guardPath root path of
-  Right p -> p
-  Left  e -> error $ "guardPathUnsafe: " ++ T.unpack (renderError e)

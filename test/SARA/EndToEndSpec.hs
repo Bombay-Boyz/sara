@@ -21,7 +21,7 @@ spec = do
           createDirectory (tmpDir </> "posts")
           createDirectory (tmpDir </> "templates")
           TIO.writeFile (tmpDir </> "posts" </> "test.md") 
-            (T.pack "---\ntitle: E2E Industrial Test\nauthor: E2E Tester\n---\n# Hello\nWelcome to SARA.")
+            (T.pack "---\ntitle: E2E Industrial Test\ndescription: A test description\nauthor: E2E Tester\n---\n# Hello\nWelcome to SARA.")
           TIO.writeFile (tmpDir </> "templates" </> "post.html") 
             (T.pack "<html><head><title>{{itemTitle}}</title></head><body><h1>{{itemTitle}}</h1></body></html>")
           

@@ -44,6 +44,9 @@ processImage spec (SafePath input) outBase = do
       let suffix = if w == 0 then "" else "-" ++ show w
       let output = outBase -<.> suffix <.> ext
       
+      validatePath input
+      validatePath output
+      
       case fmt of
         WebP -> safeCmd "cwebp" ["-q", show (imgQuality spec), input, "-o", output]
         AVIF -> safeCmd "avifenc" ["--job", "0", input, output]

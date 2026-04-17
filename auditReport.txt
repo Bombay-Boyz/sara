@@ -1,0 +1,314 @@
+SARA Static Site Generator — Severe Code Audit
+Repo: Bombay-Boyz/sara · Language: Haskell (GHC2021) · Build: Shake · Templates: Mustache (stache)
+
+1. Critical: unsafePerformIO Misuse
+SARA.Routing.Engine (lines ~55–65):
+haskellcompiled = unsafePerformIO $ RE.compile RE.compBlank RE.execBlank pat
+...
+let matches = unsafePerformIO $ RE.execute compiledRegex pathText
+SARA.Security.RegexGuard:
+haskellcase unsafePerformIO $ compile compBlank execBlank t of
+SARA.LiveReload.Server:
+haskellclientCounter :: IORef Int
+clientCounter = unsafePerformIO $ newIORef 0
+This is the worst issue in the codebase. unsafePerformIO is justified exactly once in a Haskell codebase: top-level IORef/MVar global state with {-# NOINLINE #-}. The server counter at least has {-# NOINLINE #-}. The routing/regex usages are completely unjustified — resolveRoute must live in IO or Action. The regex compilation result is not referentially transparent; it depends on a mutable internal PCRE state. GHC can inline, duplicate, or float these calls — the behavior is undefined. This is not "controlled purity" as the comment claims. It is a lie the type system cannot catch.
+
+2. Critical: error Used as a Build-Failure Mechanism
+In SARA.Internal.Planner (genRender):
+haskellLeft err -> error $ T.unpack (renderAnyErrorColor (AnySaraError err))
+Left err -> error $ T.unpack (renderAnyErrorColor (AnySaraError err))
+Left err -> error $ show err
+In SARA.DSL (loadData):
+haskellNothing -> error $ "Failed to parse JSON: " ++ path
+Left err -> error $ "Failed to parse YAML: " ++ path ++ ": " ++ show err
+_       -> error $ "Unsupported data format: " ++ ext
+In SARA.Security.PathGuard:
+haskellguardPathUnsafe root path = case guardPath root path of
+  Right p -> p
+  Left  e -> error $ "guardPathUnsafe: " ++ ...
+The monad stack (SaraM) already has ExceptT [AnySaraError]. There is zero reason to call error inside planRules. These are partial functions that throw impure exceptions and bypass the type system completely. Every single one of these should be throwError. The loadData function drops out of the monad silently for unsupported file extensions. The guardPathUnsafe function is a loaded gun exported from a security module.
+
+3. Critical: The validateSEO Function is a No-Op
+haskellvalidateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
+validateSEO item = return $ Item
+  { itemPath = itemPath item
+  , itemRoute = itemRoute item
+  ...
+  }
+The phantom type trick with ValidationState is the most architecturally promising thing in the codebase. The entire point is that you can't render an Item 'Unvalidated — you must pass through a validator. But the validator does absolutely nothing. It just unsafely coerces the phantom tag. The type system promise is being made to the user ("your item is validated") while silently being violated. This is worse than not having the type at all — it creates false confidence.
+
+4. Serious: LQIP Token Injection is a Hand-Rolled XSS Vector
+In SARA.DSL:
+haskelltoken = "__LQIP__:\" <> src <> \"__\"
+in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\">"
+The src value comes from frontmatter, which is HTML-escaped… but is then inlined into a CSS url() expression inside an inline style attribute. HTML-escaping is insufficient for CSS context. A user with a frontmatter key like:
+yamlsrc: "x);expression(alert(1))//"
+…will break IE and old browser CSS parsers. Additionally, findLQIPTokens is a hand-rolled parser that fails on edge cases (nested __, paths with special chars, etc.) and processes the token with T.drop 8 after T.breakOn "__LQIP__:" which is off-by-one — "__LQIP__:" is 9 characters, not 8.
+
+5. Serious: escapeHtml Has Wrong Ordering
+haskellescapeHtml t = T.replace "<" "&lt;"
+             . T.replace ">" "&gt;"
+             . T.replace "&" "&amp;"
+             ...
+Replacements are applied right-to-left in . composition, meaning & is escaped last, so &lt; in the input becomes &amp;lt; — double-escaped — while < in input first becomes &lt; and is then left alone. This is backwards. & must be escaped first. Every Haskell novice makes this mistake. The correct order is & → < → > → " → '.
+
+6. Serious: detectFormat is Fooled by JSON Document Bodies
+haskelldetectFormat t
+  | "{" `T.isPrefixOf` t = FmJSON
+A Markdown file whose body (with no frontmatter) begins with { — e.g., a code example, a Liquid template remnant, or any JSON snippet — will be misdetected as JSON frontmatter and fail to parse. Hugo and Hakyll both require { to appear on a line by itself as { followed by a newline. The splitJSON parser is also dangerously naïve: it looks for }\n anywhere in the file, not the top-level closing brace.
+
+7. Serious: match Returns an Empty List, Silently
+haskellmatch :: GlobPattern -> (FilePath -> SaraM (Item 'Validated)) -> SaraM [Item 'Validated]
+match g f = do
+  tell [RuleMatch g (void . f)]
+  return []  -- ← always empty
+The user code in site.hs does:
+haskellposts <- match (glob "posts/*.md") $ \file -> do ...
+buildSearchIndex "search-index.json" posts  -- posts is always []
+The comment -- always empty in the implementation reveals this is known. The DSL is a lie: it promises items but delivers nothing. The buildSearchIndex will always generate an empty index. Downstream features (RSS, sitemap, search) all silently fail with zero items if they depend on match's return value. This is the single biggest logic bug in the codebase.
+
+8. Moderate: The Monad Stack is Wrong for Shake Integration
+haskellnewtype SaraM a = SaraM
+  { unSaraM :: ReaderT SaraEnv (WriterT [RuleDecl] (ExceptT [AnySaraError] IO)) a }
+WriterT [RuleDecl] accumulates a list. This means every tell is an O(n) left-associated append — a classic Haskell performance pitfall. For large sites with hundreds of rules, this degrades. Use DList or Seq, or better yet — since all rules must be known at planning time — collect rules into an IORef [RuleDecl] in SaraEnv and eliminate the WriterT layer entirely. The current stack also mixes IO (bottom) with ExceptT (above), which means IO exceptions bypass the ExceptT handler.
+
+9. Moderate: checkHeadingHierarchy Parses Tag Names Incorrectly
+haskell, T.length name == 2
+, T.head name == 'h'
+, Just h <- [readMaybe (T.unpack $ T.drop 1 name) :: Maybe Int]
+T.head is a partial function that throws on an empty Text. TagSoup can return empty tag names. This will crash on malformed HTML. Furthermore, T.length name == 2 filters headings up to h9 only — but it excludes nothing wrong here. The bigger issue is T.head on potentially empty text.
+
+10. Moderate: Regex ReDoS Heuristics are Toy-Grade
+haskellhasAlternationInRepetition :: String -> Bool
+hasAlternationInRepetition s = "|" `L.isInfixOf` s && ")+" `L.isInfixOf` s
+This is substring matching, not parsing. (a|b)c+ would falsely trigger (has | and )+ literally does not exist here, but ")+") can appear in unrelated positions). allSplits :: [a] -> [([a], [a])] generates O(n) splits and is called on every regex. The real solution is to use a library like safe-regex or call out to a ReDoS analyser. The claim of ReDoS protection here is marketing, not engineering.
+
+11. Moderate: validateArg Only Checks for NUL
+haskellvalidateArg path =
+  if '\0' `elem` path
+  then Left $ SecurityShellInjection path "Path contains NUL byte"
+  else Right ()
+NUL is the only check. There is no validation of shell metacharacters, path separators, or control characters. The module is named ShellGuard. The comment "NEVER uses shell string interpolation" is correct in safeCmd — but validateArg providing security theater is worse than no validation, as it may create false confidence.
+
+12. Moderate: broadcastPatches Sends Full HTML Files Over WebSocket
+haskellcontent <- TIO.readFile f
+broadcastToPath clients (T.pack relPath) $ Aeson.object
+  [ "type" .= ("patch" :: T.Text)
+  , "html" .= content
+  ]
+This sends the entire HTML file content to the browser on every file change. For a page with embedded images rendered as base64 (LQIP), this could easily be hundreds of kilobytes per message, per client. Actual live reload systems send a reload signal and let the browser re-fetch. Or they do diffing. This "patch" mechanism sends a blob and presumably the client would replace the entire DOM — which would lose form state, scroll position, and any JS state. The client-side WebSocket handler in the dashboard HTML does not handle patch messages at all — only quality-seal.
+
+13. Minor: FmNone Is Handled Twice in parseFrontmatter
+haskellparseFrontmatter path content = do
+  let fmt = detectFormat content
+  case fmt of
+    FmNone -> Right (KM.empty, content)
+    _ -> do
+      (rawFM, body) <- splitFrontmatter fmt content
+      case fmt of
+        FmYAML -> ...
+        FmTOML -> ...
+        FmJSON -> ...
+        -- FmNone not handled here — but it can't reach here
+splitFrontmatter is called with fmt but FmNone is excluded by the outer case. Fine — but splitFrontmatter itself still has a FmNone branch (Right ("", t)). Dead code that creates confusion. The inner case fmt of is also non-exhaustive: FmNone has no branch. GHC should warn (-Wincomplete-patterns), but -Wno-partial-fields may be suppressing related warnings.
+
+14. Minor: collectOutputs Uses Manual Recursion Instead of concatMap
+haskellcollectOutputs env decls =
+  let go = \case
+        [] -> []
+        (RuleRender _ _ outPath : xs) -> (outDir </> outPath) : go xs
+        ...
+  in go decls
+This is textbook Haskell anti-pattern. Should be mapMaybe declToOutput decls or [outDir </> p | RuleRender _ _ p <- decls] ++ .... The manual recursion obscures intent and is harder to maintain.
+
+15. Minor: Templates Are Empty Files
+templates/default.html  -- 0 bytes
+templates/index.html    -- 0 bytes
+templates/post.html     -- 0 bytes
+The published repo ships with empty template files. A developer cloning and running sara build will get silently broken output. The scaffold templates in scaffold-test/templates/ are also worth examining — but the primary templates/ directory being empty is a documentation and usability failure.
+
+16. Minor: CMark.optUnsafe Is Passed Without Comment
+haskellopts = [CMark.optUnsafe, CMark.optSmart]
+optUnsafe allows raw HTML pass-through in Markdown. Combined with the fact that escapeHtmlValue escapes frontmatter metadata but the body goes through cmark unescaped, user-authored Markdown can inject arbitrary HTML. This is the intended behavior of most SSGs — but it should be documented, and auditTemplateForRawInterpolation doesn't audit body content.
+
+Architecture Assessment vs. Hugo and Hakyll
+DimensionSARAHakyllHugoBuild engineShake (correct choice)Shake (origin of the idea)Custom parallel GoDependency trackingBLAKE3 oracle (good)Built-in ShakeFile mtimeTemplate engineMustache (stache)Pandoc + customGo templatesType safetyPhantom types (broken validation)WeakN/A (Go)Error reportingGADT errors (good design)Runtime errorsCLI outputIncremental buildsVia ShakeVia ShakeExcellentunsafePerformIO3 sites0N/APartial functions as control flowYes (error in planner)MinimalN/AMatch returns itemsNo — always emptyYesYesMigration toolingPartial stubsNoneLimitedLive reloadPresent but brokenVia browser-syncBuilt-in HMRSearchInverted index (partial)None built-inNone built-inImage processingExternal binaries (fragile)NoneBuilt-in
+Versus Hakyll specifically: Hakyll's Rules monad is the direct inspiration for SaraM, but Hakyll uses Rules () and returns nothing from match — items are accessed via load/loadAll which goes through Shake's dependency oracle. SARA tries to do both — return items and register rules — and does neither correctly. The match-returns-empty bug is a direct consequence of failing to understand this architectural choice.
+Versus Hugo specifically: Hugo's template system has first-class partial composition, asset pipelines with fingerprinting, and multilingual support. SARA has none of these. Hugo's biggest weakness (Go templates are stringly-typed) is where SARA could genuinely win with Haskell's type system — but the validateSEO-is-a-no-op problem squanders that advantage.
+
+Summary: What Must Be Fixed Before This Is Production-Usable
+
+Remove all unsafePerformIO from routing and regex — move to IO/Action
+Fix validateSEO — it must actually validate or the phantom type is fraudulent
+Fix match — it must return actual Items or the entire DSL is broken
+Replace error in Planner with throwError — or at minimum liftIO . throwIO
+Fix escapeHtml ordering — & must be first
+Fix the off-by-one in findLQIPTokens — "__LQIP__:" is 9 chars
+Fix T.head in checkHeadingHierarchy — use pattern match or T.uncons
+Fix detectFormat for JSON — require { on its own line with a newline
+Ship non-empty templates — even a minimal working example
+Continue17:03Ran 14 commandsRan 14 commandsNow I have everything needed. Let me write the full continuation audit.
+
+SARA Audit — Part 2: Deep Continuation
+
+17. Critical: remapMetadata Has a Two-Phase Race Condition — Remapping Is Always a No-Op
+This is an architectural logic bug that goes unnoticed because match already returns an empty list (Issue #7), so nothing downstream ever exercises the remap path at scale. But the defect is independent and severe.
+In SARA.hs:
+haskell-- Phase 1: DSL execution — envRemapRules is []
+let initialEnv = SaraEnv { ..., envRemapRules = [], ... }
+result <- runExceptT $ runWriterT $ runReaderT (unSaraM m) initialEnv
+
+-- Phase 2: Remap rules extracted AFTER DSL has already run
+let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
+let finalEnv = initialEnv { envRemapRules = allRemapRules }
+In DSL.hs, readMarkdown calls Remap.remapMetadata (envRemapRules env) — but it reads envRemapRules from the initialEnv, which always has envRemapRules = []. The RuleRemap collector runs in Phase 2, which is too late. The DSL is sequential — remapMetadata [...] tells the WriterT to emit a RuleRemap declaration, but readMarkdown has already consumed envRemapRules during Phase 1 of the same DSL execution.
+In other words: the scaffolded site.hs template that ships with SARA has a metadata remapping step that silently does nothing every single time. The architecture document claims this is a first-class feature. It is broken by design.
+The fix requires either a two-pass execution (first collect all RuleRemap, then re-run content rules with the populated env), or moving remap rules into a pre-execution configuration step entirely separate from the SaraM writer.
+
+18. Critical: readMarkdown Reads Files Outside Shake's Dependency Graph
+haskellreadMarkdownWith customHandler file = do
+  content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
+This is a liftIO raw file read inside SaraM, which executes during the DSL evaluation phase — before Shake's build rules are even registered. It is completely invisible to Shake's dependency tracking. Shake has no idea this file was read, so:
+
+Incremental rebuilds will not trigger when the file changes
+There is no need [file] call, so Shake cannot parallelize correctly
+The BLAKE3 hash oracle is registered in genRender's needBlake3, but by then the content has already been read in Phase 1 and cached in the Item — the hash check is checking the file at the Shake rule execution time against an Item built at DSL evaluation time, which could be a different version of the file if it changed between the two phases
+
+This completely undermines the claimed incremental build feature. Hakyll avoids this problem by having readMarkdown be an Action (inside Shake's rule system), not a pre-rule DSL step.
+
+19. Critical: sara.yaml Is Scaffolded but Never Read
+The scaffold generates:
+yamltitle: Scaffold Site
+author: Tester
+baseUrl: /
+outputDir: _site
+But in SARA.hs:
+haskelllet config = SaraConfig
+      { cfgSiteTitle = "SARA Site"
+      , cfgSiteUrl = "http://localhost:8080"
+      ...
+      }
+The config is hardcoded. There is no parseConfig, no loadYaml, no decodeFile for sara.yaml anywhere in the codebase. The scaffolded file is a lie. Every project will always be named "SARA Site" regardless of what users put in their sara.yaml. This is a complete product-level failure: the primary configuration mechanism the user is told to edit does nothing.
+
+20. Serious: Template Compilation Happens Outside the Oracle — No Caching
+haskelltype instance RuleResult TemplateOracle = FilePath
+
+addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
+  -- ... audits, then returns the path
+  pure path
+
+renderTemplate tplPath ctx = do
+  _ <- askOracle (TemplateOracle tplPath)   -- oracle: just checks audit
+  res <- liftIO $ Mustache.compileMustacheFile tplPath  -- ← compilation happens HERE
+  let result = TL.toStrict $ Mustache.renderMustache res ctx
+  pure $ Right result
+The oracle result is FilePath — it stores nothing. The template is compiled fresh on every single call to renderTemplate. For a 500-page site with one template, this is 500 compileMustacheFile calls, each doing a full parse of the template file, completely defeating Shake's oracle caching mechanism. The oracle exists only to run the security audit, not to cache the compiled template. The comment -- stache has its own cache if we use the same tpl object is present in the code but not acted on. This is either a deliberate deferral or a fundamental misunderstanding of how Shake oracles work.
+
+21. Serious: Duplicate Error Type Hierarchy — SARA.Error and SARA.Routing.Error Define the Same Constructors
+haskell-- SARA.Error:
+RouteConflict :: { rtFile1, rtFile2, rtOutput } -> SaraError 'EKRouting
+RouteRegexInvalid :: { rtPattern, rtDetail }    -> SaraError 'EKRouting
+
+-- SARA.Routing.Error:
+data RoutingError where
+  RouteConflict   :: { rtFile1, rtFile2, rtOutput } -> RoutingError
+  RouteRegexInvalid :: { rtPattern, rtDetail }      -> RoutingError
+Two completely separate types with identical constructor names and fields exist in parallel. The routing engine returns RE.RoutingError, which the DSL then manually transcribes into SaraError 'EKRouting:
+haskellLeft (RE.RouteRegexInvalid p d) -> Left $ RouteRegexInvalid p d
+Left (RE.RouteConflict f1 f2 o) -> Left $ RouteConflict f1 f2 o
+This is pure boilerplate that exists because the module structure was designed backwards. SARA.Routing.Error should not exist — resolveRoute should return Either (SaraError 'EKRouting) directly. The transcription layer is a maintenance hazard: any new field added to RoutingError must be mirrored in both places.
+
+22. Serious: filterEvents Is Called Twice in watchProject
+haskell_ <- watchTree mgr root (filterEvents) $ \event -> do
+  when (filterEvents event) $ do   -- called again here
+    ...
+watchTree already takes a predicate as its third argument — it only calls the callback when the predicate returns True. The inner when (filterEvents event) is redundant and suggests the author didn't understand watchTree's API. More importantly, it means filterEvents is evaluated twice per event, and if fsnotify ever changes the semantics of that predicate argument, the double-filtering could silently break.
+
+23. Serious: prop_yaml_roundtrip Property Test Will Always Fail on Non-Empty Input
+haskellprop_yaml_roundtrip pairs =
+  ...
+  in case parseFrontmatter "test.md" content of
+       Right (meta, _) -> Aeson.toJSON meta === Aeson.toJSON obj
+       Left _          -> property False   -- ← fails on parse error
+parseFrontmatter calls applyHtmlEscape which calls escapeHtml. But escapeHtml has the wrong operator ordering (Issue #5). For any alphanumeric-only input (which the test uses), there are no HTML special chars, so the roundtrip accidentally passes. However, the test is constrained to isAlphaNum specifically because the author already knew that any value containing &, <, >, or " would break the roundtrip due to escaping. This is a test written to avoid failing on a known bug. It proves nothing.
+
+24. Serious: checkHeadingHierarchy Reports False Positives for Every Page Starting With h1
+haskellin go headings 0   -- prev starts at 0
+...
+go (h:hs) prev =
+  if h > prev + 1
+  then ... SEOHeadingSkip ...
+Starting with prev = 0, the first heading h1 satisfies 1 > 0 + 1 → False. Fine. But h2 as the first heading would be 2 > 1 → False. And h3 as first heading is 3 > 1 → True. So any page that starts with h3 or deeper will generate a false-positive "Heading Skipped from 0 to 3" warning, since 0 is not a real heading level at all. The initial prev should be 1 (the valid starting level), and the check should be h > prev + 1 && prev /= 0 or use Maybe Int for the initial state.
+
+25. Serious: MigrationSpec Contains a Known-Wrong Expected Value With an Admission
+haskellit "translates link tags" $ do
+  let input    = "[link]({% link _posts/page.md %})"
+  let expected = "[link]([link](_posts/page.md))"
+  -- Note: link translation might need more work but this confirms it acts
+  translateJekyllShortcodes "test.md" input `shouldBe` Right expected
+The expected output is [link]([link](...)) — a doubly-nested link, which is syntactically invalid Markdown. The test author acknowledged it ("might need more work") but committed a test asserting broken behavior as correct. This is a test that validates a bug. When the bug is fixed, this test will correctly fail — but until then, it gives false confidence.
+
+26. Moderate: The |> Operator Is Defined in a Leaf Module and Pollutes Scope
+haskell-- SARA/SEO/JsonLD.hs
+(|>) :: a -> (a -> b) -> b
+x |> f = f x
+infixl 0 |>
+This is a local definition of a pipe operator in a non-utility module. It clashes with the identically-named operator from Data.Function (&'s sibling) and potentially any other library the user imports. It should either be in a dedicated SARA.Prelude module or simply use & from Data.Function, which is already in base. Furthermore, it's only used once in JsonLD.hs:
+haskell|> maybe (Aeson.String (cfgSiteAuthor config)) id)
+Which is just fromMaybe (Aeson.String ...) (KM.lookup ...) written obtusely. This is not idiomatic Haskell.
+
+27. Moderate: loadData Escapes the Monad Into Raw IO — No Shake Tracking
+haskellloadData :: FilePath -> SaraM Aeson.Value
+loadData path = do
+  liftIO $ do
+    content <- BS.readFile path
+    ...
+Same problem as readMarkdown (Issue #18) but worse — loadData doesn't even have the BLAKE3 oracle path that readMarkdown has. A data file loaded with loadData will never trigger a rebuild when changed, because Shake has no idea it was read. Every SSG user who loads navigation data, author profiles, or tag metadata via loadData will get stale builds silently.
+
+28. Moderate: benchmarks/Main.hs Is a Stub
+haskellmain :: IO ()
+main = putStrLn "Benchmarks not yet implemented"
+The .cabal file declares a benchmark suite with criterion as a dependency. The benchmark exists only in name. For a tool claiming "industrial performance" and "high-performance static site generator" in its synopsis, having zero benchmarks is a credibility problem. More practically, criterion is a heavy dependency being compiled for zero value.
+
+29. Moderate: 13 Test Cases Are True \shouldBe` True` — Phantom Test Coverage
+Out of 801 lines of test code, 13 assertions are literally True \shouldBe` True` — unconditional passes. Examples:
+
+SecuritySpec: Four consecutive stub tests for HtmlEscape, ShellGuard, RegexGuard all pass vacuously
+StressSpec: The 1000-file stress test ends with True \shouldBe` True, meaning even if sarathrew an exception, as long asfinally` restored the working directory, the test passes
+FrontmatterSpec: The remap test stubs out the actual remap call (let remapped = meta) and asserts on the unmapped value
+
+These are not "pending" tests (which hspec supports explicitly via pending). They are passing tests that test nothing. They inflate the test count and provide false confidence.
+
+30. Moderate: generateAuditReport Embeds Raw ANSI Codes in HTML
+haskellrenderResult (AuditIssues path issues) =
+  ... map (\e -> "<div class='error'>" <> renderAnyErrorColor e <> "</div>") issues ...
+renderAnyErrorColor outputs text with ANSI terminal escape sequences (colors, bold). These sequences are then written verbatim into an HTML file. The browser will display garbled text like \ESC[31merror[E002]\ESC[0m. The function for HTML output should use renderError (no color), not renderErrorColor.
+
+31. Moderate: checkInternalLinks Uses HS.member on Full Paths, But Site Graph Has Inconsistent Path Formats
+The site graph (envSiteGraph) is populated with full paths like _site/posts/hello.html (absolute or outDir-prefixed), but checkInternalLinks normalizes relative links relative to the output path and checks membership against that same graph. The normalization does takeDirectory outPath </> target where outPath is relative (e.g., posts/hello.html), producing posts/valid.html — but the graph contains _site/posts/valid.html. These will never match, meaning checkInternalLinks will report broken links for all internal links on every page, or never report any broken links depending on path handling. The IntegrationSpec passes because it creates its own HashSet with "valid.html" and checks against "valid.html" — it never exercises the real code path where the graph prefix matters.
+
+32. Minor: SARA.Routing.Types Re-exports SARA.Types — Circular by Intent
+haskellmodule SARA.Routing.Types (module SARA.Types) where
+import SARA.Types (Route(..), RouteState(..))
+This module adds zero value. It re-exports two items from SARA.Types while exporting the entire SARA.Types module. Users importing SARA.Routing.Types get the full SARA.Types namespace unexpectedly. This should either be deleted or made a proper selective re-export.
+
+33. Minor: read [digit] in Routing/Engine.hs Is Technically Partial
+haskelllet idx = read [digit] :: Int
+digit comes from digitChar in Megaparsec, so it is guaranteed to be 0–9. read on a single decimal digit cannot fail. However, this is still non-idiomatic — Data.Char.digitToInt is the correct function and removes the read call entirely: let idx = digitToInt digit.
+
+34. Minor: validateArg Is Exported at the Top Level of SARA But Never Called Internally
+haskell-- SARA.hs
+module SARA ( ..., validateArg, ... )
+validateArg is exported to users, suggesting they should call it before passing paths to external tools. But SARA's own internal tools (processImage, copyAsset) never call it. safeCmd in ShellGuard is not safe against shell metacharacters (only NUL bytes via the separate validateArg), and internally processImage passes SafePath values directly to safeCmd without calling validateArg first. The safety guarantee is half-implemented.
+
+35. Minor: The Performance Score Formula Is Meaningless
+haskelllet perfScore = if itemCount > 0 then min 100 (90 + (itemCount `div` 100)) else 0
+This formula gives 90/100 for 0–99 items, 91/100 for 100–199, up to 100/100 for 1000+ items. It has no relation to actual build performance, page weight, asset optimization, or any real metric. It is a vanity number that always shows ≥90 for any non-empty site. The "Quality Seal" prominently displayed at the end of every build reports a Performance score that is a function of how many pages you have, not how fast or well-optimized the site is. This is misleading to users.
+
+Architecture Documentation vs. Reality — Scorecard
+The ARCHITECTURE.md makes five claims. Here is the truth of each:
+ClaimReality"The DSL ensures that render can only be called on an Item 'Validated"True syntactically, false semantically — validateSEO is a no-op coercion"LQIP Generation: Cached via Shake Oracles"The oracle exists and caches. But the token injection parser has an off-by-one error and CSS-context injection"Incremental Indexing: O(1) index updates"Partially implemented. readMarkdown reads files outside Shake, breaking incremental correctness"LiveReload: DOM patching only to browsers viewing that path"broadcastPatches sends full HTML of every HTML file to matching clients. The client-side patch handler replaces only <main> innerHTML — not a DOM patch"PathGuard: fast and testable, does not require filesystem"This claim is true and the implementation is correct
+
+Final Severity Summary
+#IssueSeverity1unsafePerformIO in routing and regex — undefined behaviorCritical2error as build failure in Planner, Hash, DSL, RendererCritical3validateSEO is a phantom-type fraud — no-op coercionCritical7match always returns [] — all downstream features brokenCritical17Remap two-phase race — remapMetadata is always a no-opCritical18readMarkdown reads files outside Shake — incremental builds brokenCritical19sara.yaml is never read — all user configuration silently ignoredCritical4LQIP token injection is a CSS-context injection vectorSerious5escapeHtml wrong operator order — & double-escapedSerious6detectFormat misidentifies JSON-starting Markdown bodiesSerious20Template compiled on every render — oracle caching bypassedSerious21Duplicate routing error types with manual transcriptionSerious22filterEvents called twice in watcherSerious23Roundtrip test avoids the escaping bug it should catchSerious24SEO heading check false-positives for prev = 0Serious25Migration test validates a known-broken outputSerious27loadData reads outside Shake — data file changes never rebuildSerious31Link checker site graph path mismatch — never works correctlySerious9T.head on potentially empty tag name — partial functionModerate10ReDoS heuristics are substring matching, not parsingModerate12Live reload sends full HTML per client — O(n×pages) WebSocket trafficModerate28Benchmark suite is a stub with a heavy dependencyModerate2913 tests are True \shouldBe` True` — zero coverageModerate30Audit report embeds ANSI codes into HTML outputModerate32SARA.Routing.Types is a noise moduleMinor33read [digit] — use digitToIntMinor34validateArg exported but never called internallyMinor35Performance score is a vanity counter, not a metricMinor
+Bottom line: The codebase has genuine architectural ambition. The phantom-type error pipeline is the right idea. Shake as the build engine is the right choice. The security module structure is thoughtful. But 7 critical bugs — including match always returning empty, sara.yaml being ignored, and incremental builds being fundamentally broken — mean this does not function as described in any of its documentation. It cannot be called production-ready in its current state.

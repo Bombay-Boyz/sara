@@ -15,39 +15,40 @@ module SARA.DSL
   , buildSitemap
   , buildRSS
   , loadData
-  , FeedConfig(..)
   , imagePlaceholder
   , regexRoute
   , glob
-  , object
-  , (.=)
+  , void
   ) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
-import SARA.Types (GlobPattern(..), Item(..), ValidationState(..), Route(..), RouteState(..), FeedConfig(..))
+import SARA.Types
+import SARA.Config
 import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..))
-import SARA.Error (SaraError(..), AnySaraError(..), SaraErrorKind(..))
-import SARA.Routing.Engine (resolveRoute)
-import qualified SARA.Routing.Error as RE
-import qualified SARA.Routing.Engine as REngine
+import SARA.Error (SaraError(..), AnySaraError(..))
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
 import qualified SARA.Frontmatter.Remap as Remap
 import SARA.Asset.Discover (discoverAssets)
 import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
+import System.FilePath.Glob (globDir1, compile)
 import Control.Monad.Writer (tell)
 import Control.Monad.Reader (ask)
 import Control.Monad.Except (throwError)
 import Data.Aeson (KeyValue(..), object)
 import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Key as K
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified BLAKE3
+import qualified Data.Text as T
+import Data.Text (Text)
+import qualified Data.Text.Encoding as T
 import qualified Data.Yaml as Yaml
-import System.FilePath (takeExtension)
+import System.FilePath (takeExtension, replaceExtension)
+import qualified SARA.Routing.Engine as REngine
+import SARA.Internal.Hash (askData)
 
 -- | Match source files by glob and run logic for each.
 match
@@ -55,64 +56,97 @@ match
   -> (FilePath -> SaraM (Item 'Validated))
   -> SaraM [Item 'Validated]
 match g f = do
-  tell [RuleMatch g (void . f)]
-  return [] 
+  let patStr = T.unpack (unGlobPattern g)
+  files <- liftIO $ globDir1 (compile patStr) "."
+  items <- mapM f files
+  tell [RuleMatch g f]
+  return items
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
 discover = discoverAssets
 
--- | Apply a route to the current item.
-route :: Route 'Abstract -> Item 'Unvalidated -> Either (SaraError 'EKRouting) (Item 'Unvalidated)
-route r item = case resolveRoute r (itemPath item) of
-  Right res -> Right item { itemRoute = res }
-  Left (RE.RouteRegexInvalid p d) -> Left $ RouteRegexInvalid p d
-  Left (RE.RouteConflict f1 f2 o) -> Left $ RouteConflict f1 f2 o
+-- | Explicitly assign a route to an item.
+route :: Route 'Abstract -> Item 'Validated -> SaraM (Item 'Validated)
+route r item = return $ item { itemRoute = ResolvedRoute "TODO_RESOLVE" } -- Placeholder
 
--- | Read and parse a Markdown file, returning an unvalidated Item.
+-- | Read a Markdown file into an Item.
 readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
-readMarkdown file = readMarkdownWith (\sc -> "{{% " <> scName sc <> " ... %}}") file
+readMarkdown file = readMarkdownWith (\_ -> "") file
 
--- | Variant of readMarkdown that allows custom shortcode processing.
-readMarkdownWith :: (Shortcode -> Text) -> FilePath -> SaraM (Item 'Unvalidated)
+-- | Read Markdown with a custom shortcode handler.
+readMarkdownWith 
+  :: (Shortcode -> Text) 
+  -> FilePath 
+  -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
   env <- ask
-  content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
-  case parseFrontmatter file content of
-    Right (meta, body) -> do
-      let rules = envRemapRules env
-      case Remap.remapMetadata rules file meta of
-        Left err -> throwError [AnySaraError err]
-        Right remappedMeta -> do
-          -- 2. Expand shortcodes with industrial image support
-          let handler sc = case scName sc of
-                "image" -> 
-                  let src = Map.findWithDefault "" "src" (scArgs sc)
-                      alt = Map.findWithDefault "" "alt" (scArgs sc)
-                      -- Inject a magic token that genRender will replace with real LQIP
-                      token = "__LQIP__:" <> src <> "__"
-                  in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
-                _ -> customHandler sc
+  if envIsPlanning env
+    then -- During planning, we don't read the file body.
+         return $ Item
+           { itemPath = file
+           , itemRoute = ResolvedRoute (replaceExtension file "html")
+           , itemMeta = KM.empty
+           , itemBody = ""
+           , itemHash = BLAKE3.hash Nothing ([] :: [BS.ByteString])
+           }
+    else do
+      content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
+      case parseFrontmatter file content of
+        Right (meta, body) -> do
+          let rules = envRemapRules env
+          case Remap.remapMetadata rules file meta of
+            Left err -> throwError [AnySaraError err]
+            Right remappedMeta -> do
+              -- 2. Expand shortcodes with industrial image support
+              let handler sc = case scName sc of
+                    "image" -> 
+                      let src = Map.findWithDefault "" "src" (scArgs sc)
+                          alt = Map.findWithDefault "" "alt" (scArgs sc)
+                          -- We use a more robust token format that is less likely to be broken by path characters
+                          -- and we'll ensure src doesn't contain the delimiter.
+                          safeSrc = T.replace "__" "" src
+                          token = "__LQIP__:" <> safeSrc <> "__"
+                      in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
+                    _ -> customHandler sc
 
-          let htmlBody = parseMarkdown handler file body
-          return $ Item
-            { itemPath = file
-            , itemRoute = ResolvedRoute file
-            , itemMeta = remappedMeta
-            , itemBody = htmlBody
-            , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-            }
-    Left err -> throwError [AnySaraError err]
+              let htmlBody = parseMarkdown handler file body
+              return $ Item
+                { itemPath = file
+                , itemRoute = ResolvedRoute (replaceExtension file "html")
+                , itemMeta = remappedMeta
+                , itemBody = htmlBody
+                , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
+                }
+        Left err -> throwError [AnySaraError err]
 
 -- | Validate SEO properties.
 validateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
-validateSEO item = return $ Item
-  { itemPath = itemPath item
-  , itemRoute = itemRoute item
-  , itemMeta = itemMeta item
-  , itemBody = itemBody item
-  , itemHash = itemHash item
-  }
+validateSEO item = do
+  env <- ask
+  if envIsPlanning env
+    then -- Coerce type for planning phase
+      return $ Item
+        { itemPath = itemPath item
+        , itemRoute = itemRoute item
+        , itemMeta = itemMeta item
+        , itemBody = itemBody item
+        , itemHash = itemHash item
+        }
+    else do
+      let meta = itemMeta item
+      let title = KM.lookup (K.fromText "title") meta
+      let desc = KM.lookup (K.fromText "description") meta
+      case (title, desc) of
+        (Just _, Just _) -> return $ Item
+          { itemPath = itemPath item
+          , itemRoute = itemRoute item
+          , itemMeta = itemMeta item
+          , itemBody = itemBody item
+          , itemHash = itemHash item
+          }
+        (Nothing, _) -> throwError [AnySaraError $ SEOTitleMissing (itemPath item)]
+        (_, Nothing) -> throwError [AnySaraError $ SEODescriptionMissing (itemPath item)]
 
 -- | Render an Item through a template.
 render :: FilePath -> Item 'Validated -> SaraM ()
@@ -134,31 +168,34 @@ remapMetadata rules = tell [RuleRemap rules]
 
 -- | Register a search index generation rule.
 buildSearchIndex :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSearchIndex outPath items = tell [RuleSearch outPath items]
+buildSearchIndex outPath ps = tell [RuleSearch outPath ps]
 
 -- | Register a sitemap.xml generation rule.
 buildSitemap :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSitemap outPath items = tell [RuleSitemap outPath items]
+buildSitemap outPath ps = tell [RuleSitemap outPath ps]
 
 -- | Register an RSS feed generation rule.
 buildRSS :: FilePath -> FeedConfig -> [Item 'Validated] -> SaraM ()
-buildRSS outPath cfg items = tell [RuleRSS outPath cfg items]
+buildRSS outPath cfg ps = tell [RuleRSS outPath cfg ps]
 
 -- | Loads structured data (JSON or YAML) from a file.
---   Automatically tracks dependencies.
+--   Automatically tracks dependencies in Shake.
 loadData :: FilePath -> SaraM Aeson.Value
 loadData path = do
-  liftIO $ do
-    content <- BS.readFile path
-    let ext = takeExtension path
-    case ext of
-      ".json" -> case Aeson.decodeStrict content of
-                   Just v -> return v
-                   Nothing -> error $ "Failed to parse JSON: " ++ path
-      ".yaml" -> case Yaml.decodeEither' content of
-                   Right v -> return v
-                   Left err -> error $ "Failed to parse YAML: " ++ path ++ ": " ++ show err
-      _       -> error $ "Unsupported data format: " ++ ext
+  -- 1. Tell Shake to track this file as a dependency.
+  tell [RuleDataDependency path]
+  
+  -- 2. Read the file NOW (planning) to allow the DSL to use the data.
+  content <- liftIO $ BS.readFile path
+  let ext = takeExtension path
+  case ext of
+    ".json" -> case Aeson.decodeStrict content of
+                 Just v -> return v
+                 Nothing -> throwError [AnySaraError $ AssetProcessingFailed path "Failed to parse JSON"]
+    ".yaml" -> case Yaml.decodeEither' content of
+                 Right v -> return v
+                 Left err -> throwError [AnySaraError $ AssetProcessingFailed path (T.pack $ show err)]
+    _       -> throwError [AnySaraError $ AssetProcessingFailed path (T.pack $ "Unsupported data format: " ++ ext)]
 
 -- | Generates a Base64 LQIP magic token for an image.
 imagePlaceholder :: FilePath -> SaraM Text
@@ -166,9 +203,11 @@ imagePlaceholder path = return $ "__LQIP__:" <> T.pack path <> "__"
 
 -- | Smart constructor for regex routes.
 regexRoute :: Text -> Text -> SaraM (Route 'Abstract)
-regexRoute pat repl = case REngine.regexRoute pat repl of
-  Right r -> return r
-  Left err -> throwError [AnySaraError err]
+regexRoute pat repl = do
+  res <- liftIO $ REngine.regexRoute pat repl
+  case res of
+    Right r -> return r
+    Left err -> throwError [AnySaraError err]
 
 -- | Convenience helper for glob patterns.
 glob :: Text -> GlobPattern

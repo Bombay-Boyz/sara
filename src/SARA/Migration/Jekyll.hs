@@ -32,7 +32,8 @@ translatePostUrl t =
            link = "[" <> T.strip slug <> "](" <> url <> ")"
        in before <> link <> translatePostUrl (T.drop 3 after)
 
--- {% link _posts/2010-06-15-my-post.md %} -> [link](/posts/2010-06-15-my-post.html)
+-- {% link _posts/2010-06-15-my-post.md %} -> /posts/2010-06-15-my-post.html
+-- Note: SARA keeps the source path for now but ensures it's not wrapped in a link.
 translateLink :: Text -> Text
 translateLink t = 
   let (before, match) = T.breakOn "{% link " t
@@ -41,8 +42,8 @@ translateLink t =
      else 
        let rest = T.drop (T.length "{% link ") match
            (path, after) = T.breakOn " %}" rest
-           link = "[link](" <> T.strip path <> ")"
-       in before <> link <> translateLink (T.drop 3 after)
+           url = T.strip path
+       in before <> url <> translateLink (T.drop 3 after)
 
 -- {% highlight ruby %} -> ```ruby
 -- {% endhighlight %} -> ```

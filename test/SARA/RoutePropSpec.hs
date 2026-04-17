@@ -1,16 +1,15 @@
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GADTs #-}
 
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 module SARA.RoutePropSpec (spec) where
 
 import Test.Hspec
 import Test.QuickCheck
-import SARA.Routing.Types
+import Test.QuickCheck.Monadic
+import SARA.Types
 import SARA.Routing.Engine
 
--- | Generator for Abstract Routes
 instance Arbitrary (Route 'Abstract) where
   arbitrary = oneof 
     [ pure SlugRoute
@@ -20,10 +19,11 @@ instance Arbitrary (Route 'Abstract) where
 
 -- | Property: resolveRoute always returns a ResolvedRoute
 prop_resolveRoute_isResolved :: Route 'Abstract -> FilePath -> Property
-prop_resolveRoute_isResolved route path =
-  case resolveRoute route path of
-    Right (ResolvedRoute _) -> property True
-    _                       -> property False
+prop_resolveRoute_isResolved route path = monadicIO $ do
+  res <- run $ resolveRoute route path
+  case res of
+    Right (ResolvedRoute _) -> assert True
+    _                       -> assert False
 
 spec :: Spec
 spec = do

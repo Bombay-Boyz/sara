@@ -7,7 +7,7 @@ module SARA.Internal.Engine
 import Development.Shake
 import SARA.Monad (RuleDecl, SaraEnv(..))
 import SARA.Internal.Planner (planRules)
-import SARA.Internal.Hash (addBlake3Oracle, addLQIPOracle)
+import SARA.Internal.Hash (addBlake3Oracle, addLQIPOracle, addDataOracle)
 import SARA.Template.Renderer (addTemplateOracle)
 import SARA.Security.PathGuard (ProjectRoot(..))
 import System.FilePath ((</>))
@@ -30,6 +30,7 @@ runBuild env rules = do
   withArgs [] $ shake options $ do
     addBlake3Oracle
     addLQIPOracle
+    addDataOracle
     addTemplateOracle
     planRules env rules
   

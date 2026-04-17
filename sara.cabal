@@ -61,8 +61,6 @@ library
     SARA.Frontmatter.Parser
     SARA.Frontmatter.Remap
     SARA.Routing.Engine
-    SARA.Routing.Types
-    SARA.Routing.Error
     SARA.SEO.JsonLD
     SARA.SEO.OpenGraph
     SARA.SEO.Audit

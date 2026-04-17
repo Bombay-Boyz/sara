@@ -10,6 +10,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Text (Text)
 import qualified Data.Text as T
 import SARA.Error (SaraError(..), SaraErrorKind(..))
+import Data.List (foldl')
 
 -- | Opaque newtype. A 'SafeHtml' value has been HTML-escaped.
 newtype SafeHtml = SafeHtml { unSafeHtml :: Text }
@@ -24,12 +25,15 @@ escapeHtmlValue = \case
   other    -> other
 
 -- | Simple HTML escaping for SARA.
+--   Note: We escape '&' FIRST to avoid double-escaping entities like '&lt;'.
 escapeHtml :: Text -> Text
-escapeHtml t = T.replace "<" "&lt;" 
-             . T.replace ">" "&gt;" 
-             . T.replace "&" "&amp;" 
-             . T.replace "\"" "&quot;" 
-             . T.replace "'" "&#39;" $ t
+escapeHtml t = foldl' (\acc (old, new) -> T.replace old new acc) t
+  [ ("&", "&amp;")
+  , ("<", "&lt;")
+  , (">", "&gt;")
+  , ("\"", "&quot;")
+  , ("'", "&#39;")
+  ]
 
 -- | Scan a template file's text for {{{ }}} patterns.
 auditTemplateForRawInterpolation
@@ -54,8 +58,3 @@ findRawInterpolation content =
   let lines_ = T.lines content
   in concat [ [ (T.takeWhile (/= '}') (T.drop 3 (snd pair)), line) | pair <- T.breakOnAll "{{{" l ] 
             | (l, line) <- zip lines_ [1..] ]
-
--- Wait, T.breakOnAll returns a list of (prefix, suffix).
--- So {{{ key }}} would have suffix starting with {{{ key }}}.
--- T.drop 3 rest would be " key }}}...".
--- T.takeWhile (/= '}') would be " key ".

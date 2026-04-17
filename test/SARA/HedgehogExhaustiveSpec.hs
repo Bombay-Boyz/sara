@@ -13,6 +13,7 @@ import SARA.Security.RegexGuard
 import SARA.Security.HtmlEscape
 import SARA.Frontmatter.Parser
 import SARA.Error
+import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Aeson as Aeson
 import System.FilePath (joinPath, splitDirectories, isAbsolute)
@@ -45,7 +46,8 @@ prop_regexGuard_redos = do
   -- Generate patterns that look like (a+)+
   core <- forAll $ Gen.string (Range.linear 1 5) (Gen.element ['a'..'z'])
   let badPat = "(" <> T.pack core <> "+)+"
-  case mkSafeRegex badPat of
+  res <- liftIO $ mkSafeRegex badPat
+  case res of
     Left (SecurityRegexReDoS _ _) -> success
     _ -> failure 
 

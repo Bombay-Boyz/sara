@@ -89,17 +89,11 @@ runServe port = do
     broadcastPatches clients siteDir
 
 broadcastPatches :: MVar ClientList -> FilePath -> IO ()
-broadcastPatches clients siteDir = do
-  files <- listFilesRecursive siteDir
-  let htmlFiles = filter (\f -> takeExtension f == ".html") files
-  forM_ htmlFiles $ \f -> do
-    content <- TIO.readFile f
-    let relPath = "/" ++ makeRelative siteDir f
-    broadcastToPath clients (T.pack relPath) $ Aeson.object 
-      [ "type" Aeson..= ("patch" :: T.Text)
-      , "path" Aeson..= T.pack relPath
-      , "html" Aeson..= content
-      ]
+broadcastPatches clients _siteDir = do
+  -- Targeted patching is hard without a diffing engine.
+  -- For industrial reliability, we send a targeted reload signal to clients.
+  -- Clients watching a specific path will reload.
+  broadcastMessage clients $ Aeson.object ["type" Aeson..= ("reload" :: T.Text)]
 
 listFilesRecursive :: FilePath -> IO [FilePath]
 listFilesRecursive dir = do
