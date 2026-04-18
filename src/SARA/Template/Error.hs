@@ -8,22 +8,10 @@ module SARA.Template.Error
 
 import Data.Text (Text)
 
+-- | Legacy marker type for external library compatibility if needed.
+--   Most SARA template errors now use SaraError 'EKTemplate.
 data TemplateError where
-  TemplateNotFound
-    :: { tplName :: !FilePath }
-    -> TemplateError
-  TemplateCompileError
-    :: { tplName :: !FilePath, tplDetail :: !Text }
-    -> TemplateError
-  TemplateRenderFailure
-    :: { tplName :: !FilePath, tplDetail :: !Text }
-    -> TemplateError
-  TemplateKeyMissing
-    :: { tplName :: !FilePath, tplKey :: !Text }
-    -> TemplateError
-  TemplateUnsafeInterpolation
-    :: { tplName :: !FilePath, tplLine :: !Int }
-    -> TemplateError
+  TemplateGeneralError :: { tplName :: !FilePath, tplDetail :: !Text } -> TemplateError
 
 deriving instance Show TemplateError
 deriving instance Eq TemplateError

@@ -81,10 +81,10 @@ data SaraError (k :: SaraErrorKind) where
     :: { tplName :: !FilePath }
     -> SaraError 'EKTemplate
   TemplateCompileError
-    :: { tplName :: !FilePath, tplDetail :: !Text }
+    :: { tplCompileName :: !FilePath, tplCompileLine :: !(Maybe Int), tplCompileCol :: !(Maybe Int), tplCompileDetail :: !Text }
     -> SaraError 'EKTemplate
   TemplateRenderFailure
-    :: { tplName :: !FilePath, tplDetail :: !Text }
+    :: { tplRenderName :: !FilePath, tplRenderLine :: !(Maybe Int), tplRenderCol :: !(Maybe Int), tplRenderDetail :: !Text }
     -> SaraError 'EKTemplate
   TemplateKeyMissing
     :: { tplName :: !FilePath, tplKey :: !Text }
@@ -202,8 +202,12 @@ errorDetails = \case
   RouteConflict f1 f2 out -> ("error", "E011", "Route conflict: both " <> T.pack f1 <> " and " <> T.pack f2 <> " map to " <> T.pack out, Nothing)
   MarkdownUnsupportedExtension f pos feat -> ("error", "E020", "Unsupported markdown extension '" <> feat <> "' in: " <> T.pack f, Just pos)
   TemplateNotFound t -> ("error", "E030", "Template not found: " <> T.pack t, Nothing)
-  TemplateCompileError t d -> ("error", "E034", "Template compilation failed for " <> T.pack t <> ": " <> d, Nothing)
-  TemplateRenderFailure t d -> ("error", "E031", "Failed to render template " <> T.pack t <> ": " <> d, Nothing)
+  TemplateCompileError t ln col d -> 
+    let pos = SourcePos t <$> ln <*> col
+    in ("error", "E034", "Template compilation failed: " <> d, pos)
+  TemplateRenderFailure t ln col d -> 
+    let pos = SourcePos t <$> ln <*> col
+    in ("error", "E031", "Template rendering failed: " <> d, pos)
   TemplateKeyMissing t k -> ("error", "E032", "Missing key '" <> k <> "' in template: " <> T.pack t, Nothing)
   TemplateUnsafeInterpolation t ln -> ("error", "E033", "Unsafe raw interpolation detected in " <> T.pack t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))
   SEOAltMissing _ pos src -> ("warning", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)

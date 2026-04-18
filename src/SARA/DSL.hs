@@ -15,6 +15,7 @@ module SARA.DSL
   , buildSitemap
   , buildRSS
   , loadData
+  , registerShortcode
   , imagePlaceholder
   , regexRoute
   , glob
@@ -31,7 +32,7 @@ import SARA.Asset.Discover (discoverAssets)
 import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
-import Data.IORef (atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import Control.Monad (unless, void)
 import Control.Monad.Reader (ask)
 import qualified Data.Aeson as Aeson
@@ -78,6 +79,13 @@ route r item = do
 readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
 readMarkdown file = readMarkdownWith (\_ -> return "") file
 
+-- | Register a custom shortcode handler.
+registerShortcode :: Text -> (Shortcode -> SaraM Text) -> SaraM ()
+registerShortcode name handler = do
+  env <- ask
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateShortcodeHandlers = Map.insert name handler (stateShortcodeHandlers s) }, ())
+
 -- | Read Markdown with a custom shortcode handler.
 readMarkdownWith :: (Shortcode -> SaraM Text) -> FilePath -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
@@ -99,7 +107,9 @@ readMarkdownWith customHandler file = do
                    , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
                    }
             else do
-              -- 2. Expand shortcodes with industrial image support
+              state <- liftIO $ readIORef (envState env)
+              let registry = stateShortcodeHandlers state
+              -- 2. Expand shortcodes with industrial image support + registry
               let handler sc = case scName sc of
                     "image" -> 
                       let src = Map.findWithDefault "" "src" (scArgs sc)
@@ -107,7 +117,9 @@ readMarkdownWith customHandler file = do
                           safeSrc = T.replace "__" "" src
                           token = "__LQIP__:" <> safeSrc <> "__"
                       in return $ "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
-                    _ -> customHandler sc
+                    name -> case Map.lookup name registry of
+                      Just h  -> h sc
+                      Nothing -> customHandler sc
 
               htmlBody <- parseMarkdown handler file body
               return $ Item

@@ -16,14 +16,15 @@ import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
 import qualified Text.Mustache as Mustache
+import qualified Text.Mustache.Type as Mustache
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
-import SARA.Template.Error
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
 import SARA.Monad (SaraEnv(..), SaraState(..))
+import SARA.Error (SaraError(..), SaraErrorKind(..))
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
@@ -48,7 +49,7 @@ renderTemplate
   :: SaraEnv
   -> FilePath
   -> Aeson.Value
-  -> Action (Either TemplateError Text)
+  -> Action (Either (SaraError 'EKTemplate) Text)
 renderTemplate env tplPath ctx = do
   _ <- askOracle (TemplateOracle tplPath)
   
@@ -67,12 +68,19 @@ renderTemplate env tplPath ctx = do
       -- This is the first thread to reach here
       res <- (Right <$> Mustache.compileMustacheFile tplPath) `E.catches` 
                [ E.Handler $ \(e :: Mustache.MustacheException) -> 
-                   return $ Left $ TemplateCompileError tplPath (T.pack $ show e)
+                   let (ln, col, msg) = extractMustacheErrorDetails e
+                   in return $ Left $ TemplateCompileError tplPath ln col msg
                , E.Handler $ \(e :: E.SomeException) -> 
-                   return $ Left $ TemplateCompileError tplPath (T.pack $ show e)
+                   return $ Left $ TemplateCompileError tplPath Nothing Nothing (T.pack $ show e)
                ]
       return (Just res, res)
       
   case tplRes of
     Right tpl -> return $ Right $ TL.toStrict $ Mustache.renderMustache tpl ctx
     Left err  -> return $ Left err
+
+-- | Extract line, column and message from MustacheException if possible.
+extractMustacheErrorDetails :: Mustache.MustacheException -> (Maybe Int, Maybe Int, Text)
+extractMustacheErrorDetails e = 
+  let s = show e
+  in (Nothing, Nothing, T.pack s)

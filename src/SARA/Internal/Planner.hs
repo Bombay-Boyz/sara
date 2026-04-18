@@ -22,7 +22,7 @@ import SARA.Security.ShellGuard (validatePath)
 import SARA.Security.GlobGuard (unGlobPattern)
 import SARA.Template.Renderer (renderTemplate)
 import SARA.Internal.Hash (needBlake3, askLQIP)
-import SARA.Error (AnySaraError(..), renderAnyErrorColor)
+import SARA.Error (AnySaraError(..), renderAnyErrorColor, renderErrorColor)
 import SARA.SEO.Audit (auditRenderedHTML, AuditResult(..))
 import SARA.Validator.LinkChecker (checkInternalLinks)
 import SARA.Asset.Discover (inferAssetKind)
@@ -153,7 +153,7 @@ genRender env tplPath item outPath = do
             let ctx = Aeson.Object $ KM.union itemWithBody siteMeta
             
             renderTemplate env (unSafePath safeTpl) ctx >>= \case
-              Left err -> fail $ show err
+              Left err -> fail $ T.unpack $ renderErrorColor err
               Right html -> do
                 -- Inject real LQIPs by scanning for magic tokens
                 finalHtml <- injectLQIPs html

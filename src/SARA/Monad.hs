@@ -24,13 +24,13 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
-import SARA.Error (AnySaraError)
+import SARA.Error (AnySaraError, SaraError, SaraErrorKind(..))
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig)
-import SARA.Template.Error (TemplateError)
 import qualified Text.Mustache as Mustache
 import Control.Concurrent (MVar)
 import GHC.Generics (Generic)
 import Control.Monad (unless)
+import SARA.Markdown.Shortcode (Shortcode)
 
 -- | The site graph tracks all resolved output paths.
 type SiteGraph = HashSet FilePath
@@ -44,8 +44,9 @@ data SaraState = SaraState
   , stateLocalRules    :: ![RuleDecl]
   , stateItemCache     :: !(Map.Map FilePath (Item 'Validated))
   , stateDataCache     :: !(Map.Map FilePath Aeson.Value)
-  , stateTemplateCache :: !(Map.Map FilePath (MVar (Maybe (Either TemplateError Mustache.Template))))
+  , stateTemplateCache :: !(Map.Map FilePath (MVar (Maybe (Either (SaraError 'EKTemplate) Mustache.Template))))
   , stateCurrentDeps   :: ![FilePath]
+  , stateShortcodeHandlers :: !(Map.Map Text (Shortcode -> SaraM Text))
   } deriving (Generic)
 
 initialState :: SaraState
@@ -58,6 +59,7 @@ initialState = SaraState
   , stateDataCache = Map.empty
   , stateTemplateCache = Map.empty
   , stateCurrentDeps = []
+  , stateShortcodeHandlers = Map.empty
   }
 
 -- | Read-only environment for SARA.

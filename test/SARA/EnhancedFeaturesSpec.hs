@@ -6,21 +6,19 @@ module SARA.EnhancedFeaturesSpec (spec) where
 import Test.Hspec
 import SARA
 import SARA.Monad (SaraEnv(..), SaraState(..), RuleDecl(..), SaraM(..), initialState)
-import SARA.Config (defaultConfig, cfgOutputDirectory)
 import SARA.Security.PathGuard (mkProjectRoot)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.HashSet as HS
-import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.IORef
 import Control.Monad.Reader (runReaderT)
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getCurrentDirectory, setCurrentDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
 import qualified Control.Exception
+import SARA.Config (defaultConfig, cfgOutputDirectory)
 
 spec :: Spec
 spec = do
@@ -68,6 +66,35 @@ spec = do
                 KM.member "fromKey" (itemMeta item) `shouldBe` False
               Left e -> expectationFailure $ "Read markdown failed: " ++ show e
           Left e -> expectationFailure $ "Pass 1 failed: " ++ show e
+
+    it "supports dynamic custom shortcode registration" $ do
+      withSystemTempDirectory "sara-shortcode-reg" $ \tmpDir -> do
+        let postsDir = tmpDir </> "posts"
+        createDirectoryIfMissing True postsDir
+        TIO.writeFile (postsDir </> "test.md") "---\ntitle: Test\ndescription: Test\n---\nHello {{% custom %}}"
+
+        let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
+        root <- mkProjectRoot tmpDir
+        stateRef <- newIORef initialState
+
+        let dsl = do
+              registerShortcode "custom" (\_ -> return "WORLD")
+              match (glob "posts/*.md") $ \file -> do
+                item <- readMarkdown file
+                validateSEO item
+
+        let env = SaraEnv config root False [] stateRef
+        -- Run in execution mode directly to test expansion
+        -- We must be in the right directory for 'match' (globDir1)
+        curr <- System.Directory.getCurrentDirectory
+        res <- Control.Exception.bracket_ 
+                 (System.Directory.setCurrentDirectory tmpDir)
+                 (System.Directory.setCurrentDirectory curr)
+                 (Control.Exception.try (runReaderT (unSaraM dsl) env) :: IO (Either Control.Exception.SomeException [Item 'Validated]))
+        case res of
+          Right [item] -> T.isInfixOf "Hello WORLD" (itemBody item) `shouldBe` True
+          Right _ -> expectationFailure "Expected exactly one item"
+          Left e -> expectationFailure $ "DSL failed: " ++ show e
 
     it "verifies the new Scaffold contains Wow features" $ do
       let opts = ScaffoldOptions "Test Site" "Author" "/"
