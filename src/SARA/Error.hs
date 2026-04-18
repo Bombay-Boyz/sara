@@ -3,6 +3,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 
 module SARA.Error
@@ -194,7 +195,7 @@ errorColorAnsi = \case
   MigrationUnsupportedShortcode {} -> annotate (color Yellow)
   _ -> annotate (color Red)
 
-errorDetails :: SaraError k -> (T.Text, T.Text, T.Text, Maybe SourcePos)
+errorDetails :: SaraError k -> (Text, Text, Text, Maybe SourcePos)
 errorDetails = \case
   FrontmatterUnknownFormat f -> ("error", "E001", "Unknown frontmatter format in: " <> f, Nothing)
   FrontmatterParseFailure f pos d -> ("error", "E002", d, Just pos)

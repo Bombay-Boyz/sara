@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
 
-module SARA.FrontmatterSpec (spec) where
+module Unit.FrontmatterSpec (spec) where
 
 import Test.Hspec
 import SARA.Frontmatter.Detect

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
 
-module SARA.OutlierExhaustiveSpec (spec) where
+module Property.OutlierExhaustiveSpec (spec) where
 
 import Test.Hspec
 import SARA.Frontmatter.Parser

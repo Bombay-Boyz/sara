@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.StressSpec (spec) where
+module Integration.StressSpec (spec) where
 
 import Test.Hspec
 import SARA

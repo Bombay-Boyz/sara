@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+{-# LANGUAGE DataKinds #-}
 module SARA.Migration.Hakyll
   ( migrateHakyllProject
   ) where

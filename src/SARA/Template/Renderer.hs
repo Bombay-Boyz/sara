@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DataKinds #-}
 
 module SARA.Template.Renderer
   ( TemplateOracle(..)
@@ -16,6 +17,7 @@ import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
 import qualified Text.Mustache as Mustache
+import qualified Text.Mustache.Type as Mustache
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,7 +30,7 @@ import UnliftIO.IORef
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
-import qualified Control.Exception as E
+import qualified UnliftIO.Exception as E
 
 newtype TemplateOracle = TemplateOracle FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Generic)

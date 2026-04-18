@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
 
-module SARA.HedgehogExhaustiveSpec (spec) where
+module Property.HedgehogExhaustiveSpec (spec) where
 
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)

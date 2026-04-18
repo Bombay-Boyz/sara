@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 module SARA.Security.ShellGuard
   ( safeCmd
   , validateArg

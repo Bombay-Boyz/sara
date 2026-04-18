@@ -4,46 +4,19 @@ version:            0.1.0.0
 synopsis:           Simple, Adaptive, Responsive Architecture — Industrial Haskell SSG
 description:
   SARA is a high-performance static site generator built on Shake.
-  It provides type-safe routing, universal frontmatter parsing,
-  human-first error messages, security-by-construction, and migration
-  tools for Jekyll/Hugo/Hakyll.
-license:            BSD-3-Clause
-author:             Anitha Barns
-maintainer:         anithabarns@gmail.com
-category:           Web, Development
+  It features an industrial-grade DSL, unbypassable dependency tracking,
+  and a high-assurance diagnostic system.
+license:            MIT
+author:             bombay boyz
+maintainer:         bombay.boyz@hotmail.com
+category:           Web
 build-type:         Simple
-extra-source-files:
-  templates/**/*.html
-  docs/*.md
-  .hlint.yaml
 
 common warnings
-  ghc-options:
-    -Wall
-    -Wcompat
-    -Widentities
-    -Wincomplete-record-updates
-    -Wincomplete-uni-patterns
-    -Wmissing-export-lists
-    -Wno-unused-do-bind
-    -Wredundant-constraints
-    -Wpartial-fields
-    -fhide-source-paths
+    ghc-options: -Wall -Wno-name-shadowing
 
 library
-  import:             warnings
-  hs-source-dirs:     src
-  default-language:   GHC2021
-  default-extensions:
-    DataKinds
-    GADTs
-    KindSignatures
-    LambdaCase
-    OverloadedStrings
-    ScopedTypeVariables
-    StrictData
-    TupleSections
-    TypeFamilies
+  import:           warnings
   exposed-modules:
     SARA
     SARA.Error
@@ -51,13 +24,19 @@ library
     SARA.Types
     SARA.Monad
     SARA.DSL
+    SARA.Template.Lucid
+    SARA.Migration.Detect
+    SARA.Migration.Scaffold
+    SARA.Migration.Hakyll
+    SARA.LiveReload.Server
+    SARA.LiveReload.Watcher
+  other-modules:
     SARA.Security.PathGuard
     SARA.Security.GlobGuard
     SARA.Security.RegexGuard
     SARA.Security.HtmlEscape
     SARA.Security.ShellGuard
     SARA.Frontmatter.Detect
-    SARA.Frontmatter.Error
     SARA.Frontmatter.Parser
     SARA.Frontmatter.Remap
     SARA.Routing.Engine
@@ -66,63 +45,50 @@ library
     SARA.SEO.Audit
     SARA.SEO.Sitemap
     SARA.SEO.Feed
-    SARA.Validator.Error
     SARA.Validator.LinkChecker
     SARA.Validator.AssetChecker
-    SARA.Migration.Error
-    SARA.Migration.Detect
-    SARA.Migration.Jekyll
-    SARA.Migration.Scaffold
+    SARA.Migration.Hugo
     SARA.Search.Index
     SARA.Template.Renderer
-    SARA.Template.Lucid
-    SARA.LiveReload.Server
-    SARA.LiveReload.Watcher
-    SARA.Migration.Hugo
-    SARA.Migration.Hakyll
     SARA.Markdown.Shortcode
     SARA.Asset.Copy
     SARA.Asset.BinaryCheck
     SARA.Asset.Placeholder
     SARA.Diagnostics
-  other-modules:
     SARA.Internal.Planner
     SARA.Internal.Engine
     SARA.Internal.Hash
-    SARA.Security.Error
-    SARA.Markdown.Error
     SARA.Markdown.Parser
-    SARA.Template.Error
-    SARA.SEO.Error
-    SARA.Asset.Error
     SARA.Asset.Discover
     SARA.Asset.Image
   build-depends:
     base                     >= 4.16  && < 5,
     aeson                    >= 2.0,
-    blake3                   >= 0.2,
     bytestring               >= 0.11,
-    cmark-gfm                >= 0.2,
-    filepattern              >= 0.1,
-    filepath                 >= 1.4,
-    fsnotify                 >= 0.4,
-    JuicyPixels              >= 3.3,
-    JuicyPixels-extra        >= 0.5,
-    base64-bytestring        >= 1.2,
-    ansi-terminal            >= 1.0,
-    optparse-applicative     >= 0.18,
-    prettyprinter            >= 1.7,
-    prettyprinter-ansi-terminal >= 1.1,
-    regex-pcre-builtin       >= 0.95,
-    regex-base               >= 0.94,
+    text                     >= 1.2,
     shake                    >= 0.19,
+    filepath                 >= 1.4,
+    directory                >= 1.3,
+    yaml                     >= 0.11,
+    toml-parser              >= 1.3,
+    JuicyPixels              >= 3.3,
+    JuicyPixels-extra        >= 0.6,
+    base64-bytestring        >= 1.2,
+    blake3                   >= 0.1,
     stache                   >= 2.3,
+    lucid                    >= 2.11,
+    Glob                     >= 0.10,
+    fsnotify                 >= 0.4,
+    scotty                   >= 0.12,
+    websockets               >= 0.12,
+    wai-websockets           >= 3.0,
+    http-types               >= 0.12,
     stm                      >= 2.5,
     tagsoup                  >= 0.14,
-    text                     >= 1.2,
-    toml-parser              >= 1.3,
     xml-conduit              >= 1.9,
     regex-tdfa               >= 1.3,
+    regex-pcre-builtin       >= 0.95,
+    cmark-gfm                >= 0.2,
     unliftio                 >= 0.2,
     unliftio-core            >= 0.2,
     megaparsec               >= 9.0,
@@ -131,64 +97,65 @@ library
     array                    >= 0.5,
     unordered-containers     >= 0.2,
     mtl                      >= 2.2,
-    warp                     >= 3.3,
-    network                  >= 3.1,
-    websockets               >= 0.12,
-    yaml                     >= 0.11,
-    lucid                    >= 2.11,
+    prettyprinter            >= 1.7,
+    prettyprinter-ansi-terminal >= 1.1,
+    cpu                      >= 0.1,
     async                    >= 2.2,
-    directory                >= 1.3,
-    binary                   >= 0.8,
-    process                  >= 1.6,
     wai                      >= 3.2,
     wai-middleware-static    >= 0.9,
-    wai-websockets           >= 3.0,
-    http-types               >= 0.12,
-    Glob                     >= 0.10 && < 0.11
+    network                  >= 3.1
+  hs-source-dirs:   src
+  default-language: GHC2021
 
 executable sara
   import:           warnings
   main-is:          Main.hs
+  build-depends:
+    base,
+    sara,
+    optparse-applicative   >= 0.17,
+    text,
+    filepath,
+    directory,
+    unliftio,
+    warp,
+    aeson
   hs-source-dirs:   app
   default-language: GHC2021
-  build-depends:
-    base, sara, optparse-applicative, text, directory, warp, filepath, aeson
 
 test-suite sara-test
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          Spec.hs
   other-modules:
-    SARA.AdaptiveImageSpec
-    SARA.EndToEndSpec
-    SARA.EnhancedFeaturesSpec
-    SARA.FrontmatterPropSpec
-    SARA.FrontmatterSpec
-    SARA.HedgehogSecuritySpec
-    SARA.HedgehogExhaustiveSpec
-    SARA.IntegrationSpec
-    SARA.MigrationSpec
-    SARA.OutlierSpec
-    SARA.OutlierExhaustiveSpec
-    SARA.PipelineSpec
-    SARA.PropertySpec
-    SARA.RoutePropSpec
-    SARA.RoutingSpec
-    SARA.SecurityPropSpec
-    SARA.SecuritySpec
-    SARA.SEOSpec
-    SARA.SmokeSpec
-    SARA.StressSpec
-  hs-source-dirs:   test
+    Unit.AdaptiveImageSpec
+    Unit.FrontmatterSpec
+    Unit.SecuritySpec
+    Unit.SEOSpec
+    Integration.EndToEndSpec
+    Integration.EnhancedFeaturesSpec
+    Integration.IntegrationSpec
+    Integration.MigrationSpec
+    Integration.SmokeSpec
+    Integration.StressSpec
+    Property.FrontmatterPropSpec
+    Property.HedgehogExhaustiveSpec
+    Property.HedgehogSecuritySpec
+    Property.OutlierExhaustiveSpec
+    Property.OutlierSpec
+    Property.PipelineSpec
+    Property.PropertySpec
+    Property.RoutePropSpec
+    Property.RoutingSpec
+    Property.SecurityPropSpec
+  hs-source-dirs:   test, src
   default-language: GHC2021
   build-tool-depends: hspec-discover:hspec-discover
   build-depends:
     base, sara,
     hspec          >= 2.11,
-    QuickCheck     >= 2.14,
+    QuickCheck,
     aeson,
-    blake3,
-    bytestring,
     text,
     filepath,
     directory,
@@ -197,23 +164,38 @@ test-suite sara-test
     containers,
     mtl,
     unliftio,
+    unliftio-core,
     process,
     yaml,
     hedgehog,
     hspec-hedgehog,
     vector,
-    regex-base         >= 0.94
-
-
-benchmark sara-bench
-  import:           warnings
-  type:             exitcode-stdio-1.0
-  main-is:          Main.hs
-  hs-source-dirs:   bench
-  default-language: GHC2021
-  build-depends:
-    base, sara,
-    criterion      >= 1.6,
-    text,
-    filepath,
-    temporary
+    JuicyPixels,
+    JuicyPixels-extra,
+    base64-bytestring,
+    bytestring,
+    shake,
+    toml-parser,
+    blake3,
+    stache,
+    lucid,
+    Glob,
+    fsnotify,
+    scotty,
+    websockets,
+    wai-websockets,
+    http-types,
+    stm,
+    tagsoup,
+    xml-conduit,
+    regex-tdfa,
+    regex-pcre-builtin,
+    megaparsec,
+    cmark-gfm,
+    prettyprinter,
+    prettyprinter-ansi-terminal,
+    cpu,
+    async,
+    wai,
+    wai-middleware-static,
+    network

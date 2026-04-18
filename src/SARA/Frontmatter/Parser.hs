@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 module SARA.Frontmatter.Parser
   ( parseFrontmatter
   ) where

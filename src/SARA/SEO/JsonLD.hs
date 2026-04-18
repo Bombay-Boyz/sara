@@ -1,48 +1,39 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 module SARA.SEO.JsonLD
-  ( SchemaType(..)
+  ( JsonLDType(..)
   , generateJsonLD
   ) where
 
+import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Aeson as Aeson
+import GHC.Generics (Generic)
+import SARA.Types (Item(..))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
-import SARA.Config (SaraConfig(..))
-import GHC.Generics (Generic)
 
-import Data.Function ((&))
+data JsonLDType = WebSite | Article | BreadcrumbList
+  deriving (Show, Eq, Generic)
 
-data SchemaType = SchemaArticle | SchemaWebSite | SchemaWebPage
-  deriving (Eq, Show)
+-- | Generates a JSON-LD script tag.
+generateJsonLD :: JsonLDType -> Item v -> Aeson.Value
+generateJsonLD ty item = Aeson.object
+  [ "@context" Aeson..= ("https://schema.org" :: Text)
+  , "@type"    Aeson..= typeToText ty
+  , "headline" Aeson..= (case KM.lookup (K.fromText "title") (itemMeta item) of
+                            Just (Aeson.String t) -> t
+                            _ -> "Untitled")
+  , "author"   Aeson..= (case KM.lookup (K.fromText "author") (itemMeta item) of
+                            Just (Aeson.String a) -> a
+                            _ -> "Unknown")
+  -- In industrial use, we would map more fields here
+  ]
 
--- | Generate JSON-LD script block.
-generateJsonLD
-  :: SchemaType
-  -> Aeson.Object    -- ^ Item metadata (pre-escaped)
-  -> SaraConfig
-  -> Aeson.Value
-generateJsonLD stype meta config =
-  let base = KM.fromList
-        [ ("@context", "https://schema.org")
-        , ("@type", typeToText stype)
-        ]
-      specific = case stype of
-        SchemaArticle -> KM.fromList
-          [ ("headline", maybe (Aeson.String "Untitled") id (KM.lookup (K.fromText "title") meta))
-          , ("author", KM.lookup (K.fromText "author") meta 
-                       & maybe (Aeson.String (cfgSiteAuthor config)) id)
-          , ("datePublished", maybe Aeson.Null id (KM.lookup (K.fromText "date") meta))
-          ]
-        _ -> KM.empty
-  in Aeson.Object (KM.union specific base)
-
-typeToText :: SchemaType -> Aeson.Value
+typeToText :: JsonLDType -> Text
 typeToText = \case
-  SchemaArticle -> "Article"
-  SchemaWebSite -> "WebSite"
-  SchemaWebPage -> "WebPage"
-
+  WebSite        -> "WebSite"
+  Article        -> "Article"
+  BreadcrumbList -> "BreadcrumbList"

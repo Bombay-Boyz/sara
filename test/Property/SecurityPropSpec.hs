@@ -1,4 +1,4 @@
-module SARA.SecurityPropSpec (spec) where
+module Property.SecurityPropSpec (spec) where
 
 import Test.Hspec
 import Test.Hspec.QuickCheck

@@ -2,7 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module SARA.EnhancedFeaturesSpec (spec) where
+module Integration.EnhancedFeaturesSpec (spec) where
 
 import Test.Hspec
 import SARA

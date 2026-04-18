@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module SARA.SecuritySpec (spec) where
+module Unit.SecuritySpec (spec) where
 
 import Test.Hspec
 import SARA.Security.PathGuard

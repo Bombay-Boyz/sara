@@ -1,41 +1,45 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module SARA.Security.PathGuard
   ( ProjectRoot(..)
   , SafePath(..)
   , mkProjectRoot
   , guardPath
+  , unSafePath
   ) where
 
-import System.Directory (canonicalizePath)
-import System.FilePath (normalise, splitDirectories, isRelative, (</>))
-import qualified Data.List as L
+import SARA.Error (SaraError(..), SaraErrorKind(..))
+import System.FilePath (isAbsolute, makeRelative, normalise, (</>))
+import System.Directory (canonicalizePath, makeAbsolute)
 import qualified Data.Text as T
-import SARA.Error (SaraError(..), SaraErrorKind(..), renderError)
 
--- | Opaque newtype for the project root.
-newtype ProjectRoot = ProjectRoot FilePath
-  deriving (Eq, Show)
+-- | Represents a validated root directory.
+newtype ProjectRoot = ProjectRoot FilePath deriving (Show, Eq)
 
--- | Opaque newtype for a path confirmed to be within the project root.
-newtype SafePath = SafePath { unSafePath :: FilePath }
-  deriving (Eq, Show)
+-- | Represents a path that has been validated against traversal.
+newtype SafePath = SafePath FilePath deriving (Show, Eq)
 
--- | Construct a 'ProjectRoot' from a path.
+-- | Unwrap.
+unSafePath :: SafePath -> FilePath
+unSafePath (SafePath p) = p
+
+-- | Smart constructor for ProjectRoot.
 mkProjectRoot :: FilePath -> IO ProjectRoot
-mkProjectRoot path = ProjectRoot <$> canonicalizePath path
+mkProjectRoot p = ProjectRoot <$> canonicalizePath p
 
--- | Purely confirm a path is within the project root using structural check.
-guardPath
-  :: ProjectRoot
-  -> FilePath               -- ^ Candidate path
+-- | Industrial path guard: prevents traversal outside root.
+guardPath 
+  :: ProjectRoot 
+  -> FilePath 
   -> Either (SaraError 'EKSecurity) SafePath
-guardPath (ProjectRoot root) candidate = 
-  if null candidate then Right (SafePath (normalise root)) else
+guardPath (ProjectRoot root) candidate =
   let normRoot = normalise root
-      normCand = if isRelative candidate then normRoot </> candidate else normalise candidate
-      candSegments = splitDirectories normCand
-      rootSegments = splitDirectories normRoot
-  in if ".." `L.elem` splitDirectories (normalise candidate)
-     then Left $ SecurityPathTraversal "" candidate normRoot
-     else if rootSegments `L.isPrefixOf` candSegments
-          then Right (SafePath normCand)
-          else Left $ SecurityPathTraversal "" candidate normRoot
+      absCandidate = if isAbsolute candidate then candidate else normRoot </> candidate
+      normCandidate = normalise absCandidate
+  in if not (T.pack normRoot `T.isPrefixOf` T.pack normCandidate)
+     then Left $ SecurityPathTraversal (T.pack "") candidate normRoot
+     else let relative = makeRelative normRoot normCandidate
+          in if ".." `T.isInfixOf` T.pack relative
+          then Left $ SecurityPathTraversal (T.pack "") candidate normRoot
+          else Right (SafePath normCandidate)

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.FrontmatterPropSpec (spec) where
+module Property.FrontmatterPropSpec (spec) where
 
 import Test.Hspec
 import Test.QuickCheck

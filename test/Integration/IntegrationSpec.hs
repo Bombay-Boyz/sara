@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.IntegrationSpec (spec) where
+module Integration.IntegrationSpec (spec) where
 
 import Test.Hspec
 import SARA.Frontmatter.Parser

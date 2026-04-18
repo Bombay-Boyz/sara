@@ -1,4 +1,4 @@
-module SARA.SmokeSpec (spec) where
+module Integration.SmokeSpec (spec) where
 
 import Test.Hspec
 

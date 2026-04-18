@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 
-module SARA.RoutingSpec (spec) where
+module Property.RoutingSpec (spec) where
 
 import Test.Hspec
 import SARA.Routing.Engine

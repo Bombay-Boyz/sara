@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.PropertySpec (spec) where
+module Property.PropertySpec (spec) where
 
 import Test.Hspec
 import Test.QuickCheck

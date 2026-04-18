@@ -1,4 +1,4 @@
-module SARA.EndToEndSpec (spec) where
+module Integration.EndToEndSpec (spec) where
 
 import Test.Hspec
 import System.Exit (ExitCode(..))

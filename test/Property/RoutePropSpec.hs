@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
 
-module SARA.RoutePropSpec (spec) where
+module Property.RoutePropSpec (spec) where
 
 import Test.Hspec
 import Test.QuickCheck

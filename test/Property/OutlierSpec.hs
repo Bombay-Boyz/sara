@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.OutlierSpec (spec) where
+module Property.OutlierSpec (spec) where
 
 import Test.Hspec
 import SARA.Frontmatter.Parser

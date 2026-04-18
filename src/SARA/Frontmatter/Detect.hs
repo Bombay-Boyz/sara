@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 module SARA.Frontmatter.Detect
   ( FrontmatterFormat(..)
   , detectFormat

@@ -1,32 +1,34 @@
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 
-module SARA.PipelineSpec (spec) where
+module Property.PipelineSpec (spec) where
 
 import Test.Hspec
 import SARA.Frontmatter.Parser
 import SARA.Routing.Engine
-import SARA.Types (Route(..))
 import SARA.SEO.JsonLD
+import SARA.Types
 import SARA.Config (defaultConfig)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
-import qualified Data.Text as T
+import qualified BLAKE3
+import qualified Data.ByteString as BS
 
 spec :: Spec
 spec = do
   describe "SARA Integration Pipeline" $ do
     it "processes a complete metadata-to-SEO pipeline" $ do
-      -- 1. Simulated input from a file
-      let content = T.pack "---\ntitle: Integration Test\n---\n# Hello World"
+      let content = "---\ntitle: Integration Test\nauthor: Tester\n---\n# Hello"
       
-      -- 2. Parsing phase
-      let parsed = parseFrontmatter "test.md" content
-      case parsed of
+      -- 1. Parse phase
+      case parseFrontmatter "test.md" content of
         Left err -> expectationFailure $ "Parse failed: " ++ show err
-        Right (meta, _) -> do
-          -- 3. Routing phase
+        Right (meta, body) -> do
+          let item = Item "test.md" (ResolvedRoute "test.html") meta body (BLAKE3.hash Nothing ([] :: [BS.ByteString]))
+          
+          -- 3. Route phase
           res <- resolveRoute SlugRoute "test.md"
           case res of
             Left err -> expectationFailure $ "Routing failed: " ++ show err
@@ -34,7 +36,7 @@ spec = do
               outPath `shouldBe` "test.html"
               
               -- 4. SEO phase
-              let json = generateJsonLD SchemaArticle meta defaultConfig
+              let json = generateJsonLD Article item
               case json of
                 Aeson.Object obj -> do
                   KM.lookup (K.fromText "@context") obj `shouldBe` Just "https://schema.org"

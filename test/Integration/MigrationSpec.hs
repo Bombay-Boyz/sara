@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.MigrationSpec (spec) where
+module Integration.MigrationSpec (spec) where
 
 import Test.Hspec
 import SARA.Migration.Jekyll

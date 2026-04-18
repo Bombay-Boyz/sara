@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SARA.AdaptiveImageSpec (spec) where
+module Unit.AdaptiveImageSpec (spec) where
 
 import Test.Hspec
 import SARA.Markdown.Shortcode
