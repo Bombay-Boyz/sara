@@ -56,6 +56,7 @@ saraWithClients mClients m = do
   itemCacheRef <- newIORef Map.empty
   dataCacheRef <- newIORef Map.empty
   currentDepsRef <- newIORef []
+  localRulesRef <- newIORef []
   
   -- Step 1: Execute DSL to collect RuleDecls
   let initialEnv = SaraEnv
@@ -69,6 +70,7 @@ saraWithClients mClients m = do
         , envItemCache = itemCacheRef
         , envDataCache = dataCacheRef
         , envCurrentDeps = currentDepsRef
+        , envLocalRules = localRulesRef
         }
   
   result <- runExceptT $ runReaderT (unSaraM m) initialEnv

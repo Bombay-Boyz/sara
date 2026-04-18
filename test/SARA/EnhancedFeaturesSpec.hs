@@ -38,6 +38,7 @@ spec = do
         itemCacheRef <- newIORef Map.empty
         dataCacheRef <- newIORef Map.empty
         currentDepsRef <- newIORef []
+        localRulesRef <- newIORef []
 
         let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
         root <- mkProjectRoot tmpDir
@@ -49,7 +50,7 @@ spec = do
                 validateSEO item
 
         -- Step 1: Pass 1 (Planning)
-        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef currentDepsRef
+        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef currentDepsRef localRulesRef
 
         resPass1 <- runExceptT $ runReaderT (unSaraM dsl) initialEnv
         case resPass1 of

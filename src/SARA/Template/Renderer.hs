@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module SARA.Template.Renderer
   ( TemplateOracle(..)
@@ -68,8 +69,12 @@ renderTemplate tplPath ctx = do
     Just res -> return (Just res, res)
     Nothing -> do
       -- This is the first thread to reach here
-      res <- E.handle (\(E.SomeException e) -> return $ Left $ TemplateCompileError tplPath (T.pack $ show e)) $
-               Right <$> Mustache.compileMustacheFile tplPath
+      res <- (Right <$> Mustache.compileMustacheFile tplPath) `E.catches` 
+               [ E.Handler $ \(e :: Mustache.MustacheException) -> 
+                   return $ Left $ TemplateCompileError tplPath (T.pack $ show e)
+               , E.Handler $ \(e :: E.SomeException) -> 
+                   return $ Left $ TemplateCompileError tplPath (T.pack $ show e)
+               ]
       return (Just res, res)
       
   case tplRes of

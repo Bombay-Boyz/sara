@@ -22,7 +22,7 @@ module SARA.DSL
   ) where
 
 import SARA.Types
-import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), tellRule)
+import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), tellRule, commitRules)
 import SARA.Error (SaraError(..), AnySaraError(..), renderAnyErrorColor)
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
@@ -59,11 +59,12 @@ match g f = do
   files <- liftIO $ globDir1 (compile patStr) "."
   items <- mapM f files
   tellRule (RuleMatch g f)
+  commitRules
   return items
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
-discover = discoverAssets
+discover g = discoverAssets g >> commitRules
 
 -- | Explicitly assign a route to an item.
 route :: Route 'Abstract -> Item 'Validated -> SaraM (Item 'Validated)
@@ -161,6 +162,7 @@ render tpl item = do
   let outPath = case itemRoute item of
                   ResolvedRoute p -> p
   tellRule (RuleRender tpl item outPath)
+  commitRules
 
 -- | Render an Item using a custom Haskell-based renderer.
 renderWith :: (Item 'Validated -> Text) -> Item 'Validated -> SaraM ()
@@ -168,22 +170,23 @@ renderWith renderer item = do
   let outPath = case itemRoute item of
                   ResolvedRoute p -> p
   tellRule (RuleRenderRaw (renderer item) item outPath)
+  commitRules
 
 -- | Register metadata remapping rules.
 remapMetadata :: [(Text, Text)] -> SaraM ()
-remapMetadata rules = tellRule (RuleRemap rules)
+remapMetadata rules = tellRule (RuleRemap rules) >> commitRules
 
 -- | Register a search index generation rule.
 buildSearchIndex :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSearchIndex outPath ps = tellRule (RuleSearch outPath ps)
+buildSearchIndex outPath ps = tellRule (RuleSearch outPath ps) >> commitRules
 
 -- | Register a sitemap.xml generation rule.
 buildSitemap :: FilePath -> [Item 'Validated] -> SaraM ()
-buildSitemap outPath ps = tellRule (RuleSitemap outPath ps)
+buildSitemap outPath ps = tellRule (RuleSitemap outPath ps) >> commitRules
 
 -- | Register an RSS feed generation rule.
 buildRSS :: FilePath -> FeedConfig -> [Item 'Validated] -> SaraM ()
-buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps)
+buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps) >> commitRules
 
 -- | Loads structured data (JSON or YAML) from a file.
 --   Automatically tracks dependencies in Shake.

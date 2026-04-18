@@ -8,9 +8,11 @@ module SARA.Monad
   , RuleDecl(..)
   , SiteGraph
   , tellRule
+  , commitRules
   ) where
 
-import Control.Monad.Reader (ReaderT, MonadReader, asks)
+import Control.Monad (unless)
+import Control.Monad.Reader (ReaderT, MonadReader, asks, ask)
 import Control.Monad.Except (ExceptT, MonadError)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Aeson as Aeson
@@ -31,10 +33,22 @@ newtype SaraM a = SaraM
   } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv, MonadError [AnySaraError])
 
 -- | Register a rule in the SARA environment.
+--   Only effective during the planning phase.
 tellRule :: RuleDecl -> SaraM ()
 tellRule d = do
-  ref <- asks envRules
-  liftIO $ atomicModifyIORef' ref (\rules -> (d : rules, ()))
+  env <- ask
+  if envIsPlanning env
+    then liftIO $ atomicModifyIORef' (envLocalRules env) (\rules -> (d : rules, ()))
+    else return ()
+
+-- | Commit locally collected rules to the global rule set.
+commitRules :: SaraM ()
+commitRules = do
+  env <- ask
+  liftIO $ do
+    locals <- atomicModifyIORef' (envLocalRules env) (\ls -> ([], ls))
+    unless (null locals) $
+      atomicModifyIORef' (envRules env) (\globals -> (locals ++ globals, ()))
 
 data SaraEnv = SaraEnv
   { envConfig     :: !SaraConfig
@@ -47,6 +61,7 @@ data SaraEnv = SaraEnv
   , envItemCache  :: !(IORef (Map.Map FilePath (Item 'Validated)))
   , envDataCache  :: !(IORef (Map.Map FilePath Aeson.Value))
   , envCurrentDeps :: !(IORef [FilePath])
+  , envLocalRules :: !(IORef [RuleDecl])
   }
 
 
