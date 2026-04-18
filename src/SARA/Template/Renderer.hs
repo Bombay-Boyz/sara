@@ -31,6 +31,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
 import qualified UnliftIO.Exception as E
+import qualified Text.Megaparsec as MP
 
 newtype TemplateOracle = TemplateOracle FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Generic)
@@ -83,6 +84,7 @@ renderTemplate env tplPathString ctx = do
 
 -- | Extract line, column and message from MustacheException if possible.
 extractMustacheErrorDetails :: Mustache.MustacheException -> (Maybe Int, Maybe Int, Text)
-extractMustacheErrorDetails e = 
-  let s = show e
-  in (Nothing, Nothing, T.pack s)
+extractMustacheErrorDetails e = case e of
+  Mustache.MustacheParserException bundle ->
+    (Nothing, Nothing, T.pack $ MP.errorBundlePretty bundle)
+  _ -> (Nothing, Nothing, T.pack $ show e)
