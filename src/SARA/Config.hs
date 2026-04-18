@@ -14,11 +14,10 @@ import Data.Text (Text)
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import System.Directory (doesFileExist)
-import System.FilePath ((</>))
 import SARA.Security.PathGuard (ProjectRoot, mkProjectRoot)
 import qualified Data.Aeson as Aeson
 import System.Exit (exitFailure)
-import qualified Data.Text.IO as TIO
+import Data.List (isPrefixOf)
 
 data SaraConfig = SaraConfig
   { cfgSiteTitle       :: !Text
@@ -49,10 +48,18 @@ defaultConfig = SaraConfig
 loadConfig :: FilePath -> IO SaraConfig
 loadConfig path = do
   exists <- doesFileExist path
-  if exists
+  cfg <- if exists
     then Yaml.decodeFileEither path >>= \case
-      Right cfg -> return cfg
+      Right c -> return c
       Left err -> do
         putStrLn $ "SARA CONFIG ERROR: Failed to parse " ++ path ++ ": " ++ show err
         exitFailure
     else return defaultConfig
+  
+  -- Industrial Grade: Validate output directory
+  let outDir = cfgOutputDirectory cfg
+  if ".." `isPrefixOf` outDir || "/" `isPrefixOf` outDir || null outDir
+    then do
+      putStrLn $ "SARA CONFIG ERROR: outputDir '" ++ outDir ++ "' is unsafe or invalid. Must be a relative path within project."
+      exitFailure
+    else return cfg

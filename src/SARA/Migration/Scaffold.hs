@@ -22,6 +22,7 @@ data ScaffoldOptions = ScaffoldOptions
 -- | Scaffolds a new SARA project using hardcoded defaults.
 scaffoldProject :: FilePath -> ScaffoldOptions -> IO ()
 scaffoldProject root opts = do
+  let projectName = T.unpack $ scTitle opts
   putStrLn $ "Scaffolding SARA project in " ++ root
   createDirectoryIfMissing True (root </> "posts")
   createDirectoryIfMissing True (root </> "assets")
@@ -29,6 +30,7 @@ scaffoldProject root opts = do
   
   TIO.writeFile (root </> "sara.yaml") (generateConfig opts)
   TIO.writeFile (root </> "site.hs") generateSiteHs
+  TIO.writeFile (root </> projectName ++ ".cabal") (generateCabal (T.pack projectName))
   TIO.writeFile (root </> "templates" </> "post.html") sampleTemplate
   TIO.writeFile (root </> "posts" </> "hello-world.md") samplePost
   TIO.writeFile (root </> "assets" </> "search.js") searchJs
@@ -61,6 +63,17 @@ generateConfig opts = T.unlines
   , "baseUrl: " <> scBaseUrl opts
   , "outputDir: _site"
   , "defaultTemplate: templates/post.html"
+  ]
+
+generateCabal :: Text -> Text
+generateCabal name = T.unlines
+  [ "cabal-version: 3.0"
+  , "name: " <> name
+  , "version: 0.1.0.0"
+  , "executable " <> name
+  , "  main-is: site.hs"
+  , "  build-depends: base, sara, text"
+  , "  default-language: Haskell2010"
   ]
 
 generateSiteHs :: Text
@@ -214,24 +227,30 @@ searchJs = T.unlines
   , "}"
   , ""
   , "// --- LIVE PREVIEW LOGIC ---"
-  , "const socket = new WebSocket('ws://' + location.host + '/live');"
-  , "socket.onopen = () => { socket.send(JSON.stringify({ path: location.pathname })); };"
-  , "socket.onmessage = (event) => {"
-  , "  const data = JSON.parse(event.data);"
-  , "  if (data.type === 'patch' && data.path === location.pathname) {"
-  , "    const newHtml = data.html;"
-  , "    const parser = new DOMParser();"
-  , "    const doc = parser.parseFromString(newHtml, 'text/html');"
-  , "    const newMain = doc.querySelector('main').innerHTML;"
-  , "    if (document.startViewTransition) {"
-  , "      document.startViewTransition(() => {"
+  , "function connectLive() {"
+  , "  const socket = new WebSocket('ws://' + location.host + '/live');"
+  , "  socket.onopen = () => { socket.send(JSON.stringify({ path: location.pathname })); };"
+  , "  socket.onmessage = (event) => {"
+  , "    const data = JSON.parse(event.data);"
+  , "    if (data.type === 'patch' && data.path === location.pathname) {"
+  , "      const newHtml = data.html;"
+  , "      const parser = new DOMParser();"
+  , "      const doc = parser.parseFromString(newHtml, 'text/html');"
+  , "      const newMain = doc.querySelector('main').innerHTML;"
+  , "      if (document.startViewTransition) {"
+  , "        document.startViewTransition(() => {"
+  , "          document.querySelector('main').innerHTML = newMain;"
+  , "        });"
+  , "      } else {"
   , "        document.querySelector('main').innerHTML = newMain;"
-  , "      });"
-  , "    } else {"
-  , "      document.querySelector('main').innerHTML = newMain;"
+  , "      }"
+  , "    } else if (data.type === 'reload') {"
+  , "      location.reload();"
   , "    }"
-  , "  } else if (data.type === 'reload') {"
-  , "    location.reload();"
-  , "  }"
-  , "};"
+  , "  };"
+  , "  socket.onclose = () => {"
+  , "    setTimeout(connectLive, 2000);"
+  , "  };"
+  , "}"
+  , "connectLive();"
   ]

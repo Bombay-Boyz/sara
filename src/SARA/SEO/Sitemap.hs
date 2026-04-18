@@ -5,7 +5,7 @@ module SARA.SEO.Sitemap
   ( generateSitemap
   ) where
 
-import SARA.Types (Item(..), SPath)
+import SARA.Types (Item(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -26,6 +26,7 @@ renderUrl :: Text -> Item v -> Text
 renderUrl baseUrl item =
   let path = case itemRoute item of
                ResolvedRoute p -> p
+               UnresolvedRoute -> ""
       fullUrl = if "/" `T.isSuffixOf` baseUrl
                 then baseUrl <> path
                 else baseUrl <> "/" <> path

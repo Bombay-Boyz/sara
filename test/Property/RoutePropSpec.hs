@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GADTs #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Property.RoutePropSpec (spec) where
 

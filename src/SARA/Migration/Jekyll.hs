@@ -23,27 +23,30 @@ translateJekyllShortcodes _ content =
 -- Simplified translation for now.
 translatePostUrl :: Text -> Text
 translatePostUrl t = 
-  let (before, match) = T.breakOn "{% post_url " t
-  in if T.null match
+  let (before, matchFound) = T.breakOn "{% post_url " t
+  in if T.null matchFound
      then t
      else 
-       let rest = T.drop (T.length "{% post_url ") match
+       let rest = T.drop (T.length "{% post_url ") matchFound
            (slug, after) = T.breakOn " %}" rest
            url = "/posts/" <> T.strip slug <> ".html"
            link = "[" <> T.strip slug <> "](" <> url <> ")"
        in before <> link <> translatePostUrl (T.drop 3 after)
 
 -- {% link _posts/2010-06-15-my-post.md %} -> /posts/2010-06-15-my-post.html
--- Note: SARA keeps the source path for now but ensures it's not wrapped in a link.
 translateLink :: Text -> Text
 translateLink t = 
-  let (before, match) = T.breakOn "{% link " t
-  in if T.null match
+  let (before, matchFound) = T.breakOn "{% link " t
+  in if T.null matchFound
      then t
      else 
-       let rest = T.drop (T.length "{% link ") match
+       let rest = T.drop (T.length "{% link ") matchFound
            (path, after) = T.breakOn " %}" rest
-           url = T.strip path
+           -- Industrial fix: Resolve Jekyll-style internal links to SARA paths
+           cleanPath = T.strip path
+           url = if ".md" `T.isSuffixOf` cleanPath
+                 then T.replace "_posts/" "/posts/" (T.replace ".md" ".html" cleanPath)
+                 else cleanPath
        in before <> url <> translateLink (T.drop 3 after)
 
 -- {% highlight ruby %} -> ```ruby

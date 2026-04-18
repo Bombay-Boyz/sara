@@ -13,7 +13,7 @@ category:           Web
 build-type:         Simple
 
 common warnings
-    ghc-options: -Wall -Wno-name-shadowing
+    ghc-options: -Wall -Wno-name-shadowing -Werror
 
 library
   import:           warnings
@@ -30,7 +30,6 @@ library
     SARA.Migration.Hakyll
     SARA.LiveReload.Server
     SARA.LiveReload.Watcher
-  other-modules:
     SARA.Security.PathGuard
     SARA.Security.GlobGuard
     SARA.Security.RegexGuard
@@ -48,6 +47,7 @@ library
     SARA.Validator.LinkChecker
     SARA.Validator.AssetChecker
     SARA.Migration.Hugo
+    SARA.Migration.Jekyll
     SARA.Search.Index
     SARA.Template.Renderer
     SARA.Markdown.Shortcode
@@ -130,6 +130,7 @@ test-suite sara-test
   main-is:          Spec.hs
   other-modules:
     Unit.AdaptiveImageSpec
+    Unit.EngineCriticalSpec
     Unit.FrontmatterSpec
     Unit.SecuritySpec
     Unit.SEOSpec
@@ -149,7 +150,7 @@ test-suite sara-test
     Property.RoutePropSpec
     Property.RoutingSpec
     Property.SecurityPropSpec
-  hs-source-dirs:   test, src
+  hs-source-dirs:   test
   default-language: GHC2021
   build-tool-depends: hspec-discover:hspec-discover
   build-depends:

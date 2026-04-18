@@ -9,6 +9,7 @@ module SARA
   , SaraM
   , sara
   , saraWithClients
+  , saraWithClientsAndJobs
   , validateArg
   ) where
 
@@ -22,12 +23,13 @@ import SARA.Internal.Engine (runBuild)
 import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
 import SARA.LiveReload.Server (broadcastMessage, ClientList)
 import SARA.Template.Lucid (renderLucid)
+import SARA.Asset.BinaryCheck (verifyBinaries)
 import Control.Monad.Reader (runReaderT)
 import UnliftIO.IORef (newIORef, readIORef)
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (getCurrentDirectory)
+import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
 import UnliftIO.MVar (MVar)
@@ -37,17 +39,33 @@ import UnliftIO.Exception (try, SomeException)
 
 -- | Entry point for a SARA site.
 sara :: SaraM () -> IO ()
-sara m = saraWithClients Nothing m
+sara m = saraWithClientsAndJobs Nothing Nothing Nothing m
 
 -- | Entry point that supports broadcasting to live clients.
 saraWithClients :: Maybe (MVar ClientList) -> SaraM () -> IO ()
-saraWithClients mClients m = do
+saraWithClients mClients m = saraWithClientsAndJobs mClients Nothing Nothing m
+
+-- | Entry point that supports broadcasting and parallel job configuration.
+saraWithClientsAndJobs :: Maybe (MVar ClientList) -> Maybe Int -> Maybe SaraConfig -> SaraM () -> IO ()
+saraWithClientsAndJobs mClients maybeJobs maybeConfig m = do
   start <- getCPUTime
+  
+  -- Industrial Grade Step 1: Verify Environment Readiness
+  binCheck <- verifyBinaries ["cwebp", "convert"] 
+  case binCheck of
+    Left err -> do
+      TIO.putStrLn $ "WARNING: " <> renderAnyErrorColor err
+      TIO.putStrLn "SARA will continue, but image processing may fail."
+    Right () -> return ()
+
   cwd <- getCurrentDirectory
   root <- mkProjectRoot cwd
+  setCurrentDirectory cwd
   
   -- Step 0: Load config
-  config <- loadConfig (cwd </> "sara.yaml")
+  config <- case maybeConfig of
+    Just c -> return c
+    Nothing -> loadConfig (cwd </> "sara.yaml")
   
   stateRef <- newIORef initialState
   
@@ -58,6 +76,7 @@ saraWithClients mClients m = do
         , envIsPlanning = True
         , envRemapRules = []
         , envState      = stateRef
+        , envJobs       = maybeJobs
         }
   
   -- Refactored to catch exceptions using UnliftIO
@@ -83,8 +102,10 @@ saraWithClients mClients m = do
       
       end <- getCPUTime
       let itemCount = HS.size siteGraph
-      let picosPerSec = 10^(12 :: Integer)
-      let diffSecs = fromIntegral (end - start) / fromIntegral picosPerSec
+      let picosPerSec :: Integer
+          picosPerSec = 10^(12 :: Integer)
+      let diffSecs :: Double
+          diffSecs = fromIntegral (end - start) / fromIntegral picosPerSec
       let perfScore = if itemCount > 0 && diffSecs > 0
                       then min 100 (floor (fromIntegral itemCount / diffSecs / 10.0))
                       else 0

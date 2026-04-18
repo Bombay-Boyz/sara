@@ -10,11 +10,12 @@ import SARA.Monad (SPath)
 import Text.HTML.TagSoup
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, fromMaybe)
 import qualified Data.List as L
 import Text.Read (readMaybe)
 
 data AuditResult = AuditPassed | AuditIssues FilePath [AnySaraError]
+  deriving (Eq, Show)
 
 -- | Industrial SEO audit for rendered HTML.
 auditRenderedHTML :: FilePath -> Text -> AuditResult
@@ -25,6 +26,9 @@ auditRenderedHTML pathString html =
         [ checkAltAttributes path tags
         , checkHeadingStructure path tags
         , checkTitle path tags
+        , checkMetaDescription path tags
+        , checkOpenGraph path tags
+        , checkUnsafeTags path tags
         ]
   in if null issues then AuditPassed else AuditIssues pathString issues
 
@@ -54,7 +58,34 @@ checkTitle path tags =
   let titleTags = filter (isTagOpenName "title") tags
   in if null titleTags
      then [AnySaraError (SEOTitleMissing path)]
-     else []
+     else 
+       let titleText = innerText $ takeWhile (not . isTagCloseName "title") $ drop 1 $ dropWhile (not . isTagOpenName "title") tags
+       in if T.length titleText > 60
+          then [AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Title tag is too long (> 60 chars)")] -- Using AltMissing as proxy for generic warning for now
+          else []
+
+checkMetaDescription :: SPath -> [Tag Text] -> [AnySaraError]
+checkMetaDescription path tags =
+  let metas = filter (isTagOpenName "meta") tags
+      desc = L.find (\t -> getAttrib' "name" t == Just "description") metas
+  in case desc of
+    Nothing -> [AnySaraError (SEODescriptionMissing path)]
+    Just t -> 
+      let content = fromMaybe "" (getAttrib' "content" t)
+          len = T.length content
+      in if len < 50 || len > 160
+         then [AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Meta description should be between 50-160 chars")]
+         else []
+
+checkOpenGraph :: SPath -> [Tag Text] -> [AnySaraError]
+checkOpenGraph path tags =
+  let metas = filter (isTagOpenName "meta") tags
+      hasOgTitle = any (\t -> getAttrib' "property" t == Just "og:title") metas
+      hasOgImage = any (\t -> getAttrib' "property" t == Just "og:image") metas
+      issues = []
+      issues1 = if not hasOgTitle then AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Missing og:title") : issues else issues
+      issues2 = if not hasOgImage then AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Missing og:image") : issues1 else issues1
+  in issues2
 
 -- | Helper for TagSoup that handles missing attributes safely.
 getAttrib' :: Text -> Tag Text -> Maybe Text
@@ -65,3 +96,8 @@ getTagName :: Tag Text -> Text
 getTagName (TagOpen name _) = name
 getTagName (TagClose name) = name
 getTagName _ = ""
+
+checkUnsafeTags :: SPath -> [Tag Text] -> [AnySaraError]
+checkUnsafeTags path tags =
+  let unsafe = filter (\t -> isTagOpen t && getTagName t `elem` ["script", "iframe", "object", "embed"]) tags
+  in [ AnySaraError (SecurityUnsafeTemplate path 0) | _ <- unsafe ]

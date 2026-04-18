@@ -41,7 +41,7 @@ resolveRoute r sourcePath = case r of
     in return $ Right $ ResolvedRoute (T.pack $ dir </> name </> "index.html")
     
   RegexRoute (SafeRegex pat) repl ->
-    let (before, matched, after, captures) = (T.pack sourcePath) Regex.=~ pat :: (Text, Text, Text, [Text])
+    let (_before, matched, _after, captures) = (T.pack sourcePath) Regex.=~ pat :: (Text, Text, Text, [Text])
     in if not (T.null matched)
        then let resolved = interpolateCaptures captures repl
             in return $ Right $ ResolvedRoute resolved
@@ -52,8 +52,9 @@ resolveRoute r sourcePath = case r of
 
 -- | Injects regex capture groups into replacement string ($1, $2...).
 interpolateCaptures :: [Text] -> Text -> Text
-interpolateCaptures captures repl = foldr replaceGroup repl (zip [1..] captures)
+interpolateCaptures captures repl = foldr replaceGroup repl (zip ([1..] :: [Int]) captures)
   where
+    replaceGroup :: (Int, Text) -> Text -> Text
     replaceGroup (i, cap) acc = T.replace ("$" <> T.pack (show i)) cap acc
 
 -- | Checks for output path conflicts in a set of resolved routes.
@@ -66,6 +67,7 @@ detectRouteConflicts routesString =
   where
     getResolvedPath :: Route 'Resolved -> SPath
     getResolvedPath (ResolvedRoute p) = p
+    getResolvedPath UnresolvedRoute = ""
 
     checkGroup :: [(SPath, Route 'Resolved)] -> [SaraError 'EKRouting]
     checkGroup [] = []

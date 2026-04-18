@@ -8,7 +8,6 @@ module SARA.Security.HtmlEscape
 
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
 import Data.Text (Text)
 import qualified Data.Text as T
 import SARA.Error (SaraError(..), SaraErrorKind(..))

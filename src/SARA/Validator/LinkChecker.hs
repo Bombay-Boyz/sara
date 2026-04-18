@@ -4,7 +4,7 @@ module SARA.Validator.LinkChecker
   ( checkInternalLinks
   ) where
 
-import SARA.Error (SaraError(..), SaraErrorKind(..), SourcePos(..), AnySaraError(..))
+import SARA.Error (SaraError(..), SourcePos(..), AnySaraError(..))
 import SARA.Monad (SPath)
 import Text.HTML.TagSoup
 import Data.Text (Text)
@@ -39,7 +39,13 @@ validateLink siteGraph outPathText (link, _tag) =
                            else if isRelative target
                                 then normalise (takeDirectory outPath </> target)
                                 else normalise target
-    in if T.pack normalizedTarget `HS.member` siteGraph
+        targetT = T.pack normalizedTarget
+        -- Fix L-03: Try common fallbacks for directory-style links
+        possibleTargets = [ targetT
+                          , targetT <> "/index.html"
+                          , if "/" `T.isSuffixOf` targetT then targetT <> "index.html" else targetT
+                          ]
+    in if any (`HS.member` siteGraph) possibleTargets
        then []
        else [AnySaraError $ ValidatorBrokenLink outPathText (SourcePos outPathText 0 0) target]
 

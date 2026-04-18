@@ -10,9 +10,10 @@ module SARA.Security.PathGuard
   ) where
 
 import SARA.Error (SaraError(..), SaraErrorKind(..))
-import System.FilePath (isAbsolute, makeRelative, normalise, (</>))
+import System.FilePath (isAbsolute, makeRelative)
 import System.Directory (canonicalizePath, makeAbsolute)
 import qualified Data.Text as T
+import qualified Data.List as L
 
 -- | Represents a validated root directory.
 newtype ProjectRoot = ProjectRoot FilePath deriving (Show, Eq)
@@ -28,18 +29,15 @@ unSafePath (SafePath p) = p
 mkProjectRoot :: FilePath -> IO ProjectRoot
 mkProjectRoot p = ProjectRoot <$> canonicalizePath p
 
--- | Industrial path guard: prevents traversal outside root.
+-- | Industrial path guard: prevents traversal outside root using IO to resolve symlinks.
 guardPath 
   :: ProjectRoot 
   -> FilePath 
-  -> Either (SaraError 'EKSecurity) SafePath
-guardPath (ProjectRoot root) candidate =
-  let normRoot = normalise root
-      absCandidate = if isAbsolute candidate then candidate else normRoot </> candidate
-      normCandidate = normalise absCandidate
-  in if not (T.pack normRoot `T.isPrefixOf` T.pack normCandidate)
-     then Left $ SecurityPathTraversal (T.pack "") candidate normRoot
-     else let relative = makeRelative normRoot normCandidate
-          in if ".." `T.isInfixOf` T.pack relative
-          then Left $ SecurityPathTraversal (T.pack "") candidate normRoot
-          else Right (SafePath normCandidate)
+  -> IO (Either (SaraError 'EKSecurity) SafePath)
+guardPath (ProjectRoot root) candidate = do
+  -- Resolve symlinks and normalise on both sides
+  absCandidate <- makeAbsolute candidate >>= canonicalizePath
+  let relative = makeRelative root absCandidate
+  if ".." `L.isPrefixOf` relative || isAbsolute relative
+    then return $ Left $ SecurityPathTraversal (T.pack "") candidate root
+    else return $ Right (SafePath absCandidate)

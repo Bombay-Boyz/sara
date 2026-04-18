@@ -4,7 +4,7 @@ module SARA.Validator.AssetChecker
   ( checkAssetReferences
   ) where
 
-import SARA.Error (SaraError(..), SaraErrorKind(..), SourcePos(..), AnySaraError(..))
+import SARA.Error (SaraError(..), SourcePos(..), AnySaraError(..))
 import Text.HTML.TagSoup
 import Data.Text (Text)
 import qualified Data.Text as T

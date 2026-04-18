@@ -15,12 +15,15 @@ import qualified Data.Aeson as Aeson
 spec :: Spec
 spec = do
   describe "SARA.Security.PathGuard" $ do
-    it "rejects path traversal via .." $ 
-      guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/../etc" `shouldSatisfy` (\case Left _ -> True; _ -> False)
-    it "rejects absolute paths outside root" $ 
-      guardPath (ProjectRoot "/tmp/sara") "/etc/passwd" `shouldSatisfy` (\case Left _ -> True; _ -> False)
-    it "accepts paths within root" $ 
-      guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/file.md" `shouldSatisfy` (\case Right _ -> True; _ -> False)
+    it "rejects path traversal via .." $ do
+      res <- guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/../etc"
+      res `shouldSatisfy` isLeft
+    it "rejects absolute paths outside root" $ do
+      res <- guardPath (ProjectRoot "/tmp/sara") "/etc/passwd"
+      res `shouldSatisfy` isLeft
+    it "accepts paths within root" $ do
+      res <- guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/file.md"
+      res `shouldSatisfy` isRight
 
   describe "SARA.Security.GlobGuard" $ do
     it "rejects patterns containing .." $ 

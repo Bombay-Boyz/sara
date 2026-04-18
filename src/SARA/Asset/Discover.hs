@@ -25,6 +25,8 @@ inferAssetKind pathText =
     ".png"   -> SomeAssetKind (ImageAsset (ImageSpec [] [PNG] 80))
     ".jpg"   -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
     ".jpeg"  -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
+    ".webp"  -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80)) -- Assume JPEG as fallback for spec if needed
+    ".avif"  -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
     ".css"   -> SomeAssetKind StyleAsset
     ".js"    -> SomeAssetKind ScriptAsset
     ".mjs"   -> SomeAssetKind ScriptAsset

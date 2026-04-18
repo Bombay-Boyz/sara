@@ -5,7 +5,6 @@ module Unit.AdaptiveImageSpec (spec) where
 import Test.Hspec
 import SARA.Markdown.Shortcode
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import Data.Functor.Identity (runIdentity)
 
 spec :: Spec

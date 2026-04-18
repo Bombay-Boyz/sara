@@ -5,32 +5,27 @@ module Property.RoutingSpec (spec) where
 
 import Test.Hspec
 import SARA.Routing.Engine
-import SARA.Types (Route(..))
-import qualified Data.Text as T
+import SARA.Types
 
 spec :: Spec
 spec = do
-  describe "SARA.Routing.Engine" $ do
-    describe "resolveRoute" $ do
-      it "resolves SlugRoute" $ do
+  describe "Routing Engine" $ do
+    it "resolves SlugRoute to .html" $ do
         res <- resolveRoute SlugRoute "posts/hello-world.md"
         res `shouldBe` Right (ResolvedRoute "posts/hello-world.html")
 
-      it "resolves PrettyRoute" $ do
+    it "resolves PrettyRoute to index.html" $ do
         res <- resolveRoute PrettyRoute "posts/hello-world.md"
         res `shouldBe` Right (ResolvedRoute "posts/hello-world/index.html")
 
-    describe "detectRouteConflicts" $ do
-      it "detects conflicts between two routes" $ do
+    it "detects conflicts when multiple files map to same output" $ do
         let routes = [ ("a.md", ResolvedRoute "same.html")
                      , ("b.md", ResolvedRoute "same.html")
                      ]
-        let conflicts = detectRouteConflicts routes
-        length conflicts `shouldBe` 1
+        detectRouteConflicts routes `shouldSatisfy` (not . null)
 
-      it "passes with no conflicts" $ do
+    it "permits distinct routes" $ do
         let routes = [ ("a.md", ResolvedRoute "a.html")
                      , ("b.md", ResolvedRoute "b.html")
                      ]
-        let conflicts = detectRouteConflicts routes
-        length conflicts `shouldBe` 0
+        detectRouteConflicts routes `shouldBe` []

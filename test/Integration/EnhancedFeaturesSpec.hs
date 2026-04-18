@@ -18,9 +18,6 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
 import qualified UnliftIO.Exception as E
-import SARA.Config (defaultConfig, cfgOutputDirectory)
-import SARA.Security.PathGuard (mkProjectRoot)
-import Control.Monad (void)
 
 spec :: Spec
 spec = do
@@ -50,6 +47,7 @@ spec = do
               , envIsPlanning = True
               , envRemapRules = []
               , envState      = stateRef
+              , envJobs       = Nothing
               }
 
         resPass1 <- E.try (runReaderT (unSaraM dsl) initialEnv) :: IO (Either E.SomeException ())
@@ -87,7 +85,7 @@ spec = do
                 _ <- validateSEO item
                 pure item
 
-        let env = SaraEnv config root False [] stateRef
+        let env = SaraEnv config root False [] stateRef Nothing
         -- Run in execution mode directly to test expansion
         -- We must be in the right directory for 'match' (globDir1)
         curr <- getCurrentDirectory

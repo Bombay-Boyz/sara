@@ -24,6 +24,8 @@ import Development.Shake
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Char (isAlphaNum, toLower)
+import qualified Data.List as L
+import Control.Monad (foldM)
 
 data SearchEntry = SearchEntry
   { seUrl     :: !Text
@@ -61,17 +63,28 @@ generatePartialIndex entry content path = do
   liftIO $ Aeson.encodeFile path partial
 
 -- | Merges multiple partial indexes into a single final index.
+--   Industrial Grade: Chunked loading to prevent memory spikes on large sites.
 mergePartialIndexes :: [FilePath] -> FilePath -> Action ()
 mergePartialIndexes partialPaths outPath = do
-  partials <- mapM (liftIO . Aeson.decodeFileStrict') partialPaths
-  let validPartials = [ p | Just p <- partials ]
-      docMap = Map.fromList $ zip [0..] (map piEntry validPartials)
-      termMap = foldr addPartial Map.empty (zip [0..] validPartials)
-      invIdx = InvertedIndex { documents = docMap, index = termMap }
+  -- Load and merge in chunks of 100 to balance speed and memory
+  let chunks = chunkList 100 partialPaths
+  (finalDocMap, finalTermMap, _) <- foldM mergeChunk (Map.empty, Map.empty, 0 :: Int) chunks
+  let invIdx = InvertedIndex { documents = finalDocMap, index = finalTermMap }
   liftIO $ Aeson.encodeFile outPath invIdx
   where
-    addPartial (docId, p) acc =
-      foldr (\token m -> Map.insertWith Set.union token (Set.singleton docId) m) acc (piTokens p)
+    chunkList _ [] = []
+    chunkList n xs = let (h, t) = splitAt n xs in h : chunkList n t
+
+    mergeChunk (docAcc, termAcc, nextId) paths = do
+      partials <- mapM (liftIO . Aeson.decodeFileStrict') paths
+      let validPartials = [ p | Just p <- partials ]
+          newIds = [nextId ..]
+          docMap = Map.fromList $ zip newIds (map piEntry validPartials)
+          termMap = L.foldl' addPartial termAcc (zip newIds validPartials)
+      return (Map.union docAcc docMap, termMap, nextId + length validPartials)
+
+    addPartial acc (docId, p) =
+      L.foldl' (\m token -> Map.insertWith Set.union token (Set.singleton docId) m) acc (piTokens p)
 
 buildInvertedIndex :: [(Int, (Text, Text))] -> Map.Map Text (Set.Set Int)
 buildInvertedIndex docs = foldr addDoc Map.empty docs
@@ -89,7 +102,9 @@ tokenize = filter (not . T.null)
 mkSearchEntry :: Item v -> (SearchEntry, Text)
 mkSearchEntry item = 
   let entry = SearchEntry
-        { seUrl     = case itemRoute item of ResolvedRoute p -> p
+        { seUrl     = case itemRoute item of 
+                        ResolvedRoute p -> p
+                        UnresolvedRoute -> "" -- Should be resolved before indexing
         , seTitle   = case KM.lookup (K.fromText "title") (itemMeta item) of
                         Just (Aeson.String t) -> t
                         _ -> "Untitled"

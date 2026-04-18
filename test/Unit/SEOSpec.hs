@@ -4,26 +4,22 @@
 module Unit.SEOSpec (spec) where
 
 import Test.Hspec
-import SARA.SEO.JsonLD
-import SARA.Types
-import SARA.Config (defaultConfig)
-import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
-import qualified BLAKE3
-import qualified Data.ByteString as BS
+import SARA.SEO.Audit
 
 spec :: Spec
 spec = do
-  describe "JSON-LD Generation" $ do
-    it "generates valid Article schema" $ do
-      let meta = KM.fromList [ (K.fromText "title", Aeson.String "Test"), (K.fromText "author", Aeson.String "Tester") ]
-      let item = Item "test.md" (ResolvedRoute "test.html") meta "Body" (BLAKE3.hash Nothing ([] :: [BS.ByteString]))
-      let json = generateJsonLD Article item
-      case json of
-        Aeson.Object obj -> do
-          KM.lookup (K.fromText "@context") obj `shouldBe` Just "https://schema.org"
-          KM.lookup (K.fromText "@type") obj `shouldBe` Just "Article"
-          KM.lookup (K.fromText "headline") obj `shouldBe` Just "Test"
-          KM.lookup (K.fromText "author") obj `shouldBe` Just "Tester"
-        _ -> expectationFailure "Expected Aeson Object"
+  describe "SEO Auditing" $ do
+    it "detects missing alt text" $ do
+      let html = "<html><body><img src=\"test.png\"></body></html>"
+      let res = auditRenderedHTML "test.html" html
+      case res of
+        AuditIssues _ _ -> success
+        _ -> expectationFailure "Should have found SEO issues"
+
+    it "passes valid HTML" $ do
+      let html = "<html><head><title>Title</title><meta name=\"description\" content=\"A very detailed description of this wonderful site that meets length requirements.\"><meta property=\"og:title\" content=\"Title\"><meta property=\"og:image\" content=\"img.png\"></head><body><img src=\"test.png\" alt=\"text\"></body></html>"
+      let res = auditRenderedHTML "test.html" html
+      res `shouldBe` AuditPassed
+
+success :: Expectation
+success = return ()

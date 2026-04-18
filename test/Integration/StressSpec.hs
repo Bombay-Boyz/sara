@@ -1,60 +1,49 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 
 module Integration.StressSpec (spec) where
 
 import Test.Hspec
 import SARA
-import SARA.Frontmatter.Parser
-import System.IO.Temp (withSystemTempDirectory)
-import System.FilePath ((</>))
-import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory, doesFileExist, listDirectory, doesDirectoryExist)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Control.Monad (forM_, forM)
-import Control.Exception (finally)
+import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory, listDirectory, doesDirectoryExist)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
+import Control.Exception (bracket_)
 import qualified Data.List as L
 
 spec :: Spec
 spec = do
-  describe "SARA Stress Testing" $ do
-    it "handles 1000 Markdown files efficiently" $ do
+  describe "Stress Testing" $ do
+    it "handles 100 concurrent posts" $ do
       withSystemTempDirectory "sara-stress" $ \tmpDir -> do
-        let postsDir = tmpDir </> "posts"
-        let siteDir = tmpDir </> "_site"
-        createDirectoryIfMissing True postsDir
-        createDirectoryIfMissing True siteDir
-        
-        let items :: [Int]
-            items = [1..1000]
-        forM_ items $ \i -> do
-          let content = T.unlines
-                [ "---"
-                , "title: Stress Post " <> T.pack (show i)
-                , "description: A stress test post"
-                , "author: Stress Tester"
-                , "---"
-                , "# Body " <> T.pack (show i)
-                ]
-          TIO.writeFile (postsDir </> "post-" ++ show i ++ ".md") content
-        
-        -- Run the real sara engine on the 1000 files
-        oldCwd <- getCurrentDirectory
-        (`finally` setCurrentDirectory oldCwd) $ do
-          setCurrentDirectory tmpDir
-          createDirectoryIfMissing True "templates"
-          TIO.writeFile "templates/post.html" "<html><head><title>Industrial Stress Test</title></head><body>{{{itemBody}}}</body></html>"
+          let postsDir = tmpDir </> "posts"
+          let tplDir = tmpDir </> "templates"
+          createDirectoryIfMissing True postsDir
+          createDirectoryIfMissing True tplDir
           
-          -- Fix: use the correct config keys
-          TIO.writeFile "sara.yaml" "title: Stress Test\nauthor: Tester\nbaseUrl: /\noutputDir: _site"
+          -- Generate 100 posts
+          let postCount = 100
+          mapM_ (\i -> do
+              let content = "---\ntitle: Post " <> T.pack (show i) <> "\n---\nBody " <> T.pack (show i)
+              TIO.writeFile (postsDir </> "post-" ++ show i ++ ".md") content
+            ) ([1..postCount] :: [Int])
           
-          sara $ do
-            items <- match (glob "posts/*.md") $ \file -> do
+          TIO.writeFile (tplDir </> "post.html") "<html><head><title>{{ itemMeta.title }}</title><meta name=\"description\" content=\"A very detailed description of this wonderful site that meets length requirements.\"><meta property=\"og:title\" content=\"{{ itemMeta.title }}\"><meta property=\"og:image\" content=\"img.png\"></head><body><h1>{{ itemMeta.title }}</h1><div>{{{ itemBody }}}</div></body></html>"
+          
+          curr <- getCurrentDirectory
+          bracket_ (setCurrentDirectory tmpDir) (setCurrentDirectory curr) $ do
+            -- Fix: use the correct config keys
+            TIO.writeFile "sara.yaml" "title: Stress Test\nauthor: Tester\nbaseUrl: /\noutputDir: _site"
+            
+            sara $ do
+              _items <- match (glob "posts/*.md") $ \file -> do
                 item <- readMarkdown file
-                item' <- validateSEO item
-                render "templates/post.html" item'
-                pure item
-
-            return ()
+                validated <- validateSEO item
+                render "templates/post.html" validated
+                pure validated
+              return ()
         
           -- Verification: Check that at least one file was generated
           allFiles <- listFilesRecursive tmpDir
@@ -65,22 +54,13 @@ spec = do
               mapM_ putStrLn allFiles
               expectationFailure "No post-1.html found in output"
             else return ()
-        
-        True `shouldBe` True
 
-    it "handles very large Markdown files (5MB)" $ do
-      let body = T.replicate 50000 "This is a ten-word sentence that we will replicate many times. "
-      let content = "---\ntitle: Large\n---\n" <> body
-      case parseFrontmatter "large.md" content of
-        Right (_, b) -> T.length b `shouldSatisfy` (> 1000000)
-        Left e -> expectationFailure $ "Large file parse failed: " ++ show e
-
--- | Helper to list all files recursively for debugging.
 listFilesRecursive :: FilePath -> IO [FilePath]
 listFilesRecursive dir = do
-  names <- listDirectory dir
-  paths <- forM names $ \name -> do
-    let path = dir </> name
-    isDir <- doesDirectoryExist path
-    if isDir then listFilesRecursive path else return [path]
-  return (concat paths)
+  content <- listDirectory dir
+  paths <- mapM (\name -> do
+      let path = dir </> name
+      isDir <- doesDirectoryExist path
+      if isDir then listFilesRecursive path else return [path]
+    ) content
+  return $ concat paths

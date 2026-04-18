@@ -10,6 +10,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import SARA.Security.PathGuard
 import SARA.Security.HtmlEscape
+import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Aeson as Aeson
 
@@ -17,7 +18,7 @@ import qualified Data.Aeson as Aeson
 prop_pathGuard_safe :: PropertyT IO ()
 prop_pathGuard_safe = do
   path <- forAll $ Gen.string (Range.linear 1 100) Gen.alphaNum
-  let safe = guardPath (ProjectRoot "root") path
+  safe <- liftIO $ guardPath (ProjectRoot "root") path
   case safe of
     Right (SafePath p) -> assert (not $ ".." `T.isInfixOf` T.pack p)
     Left _ -> success

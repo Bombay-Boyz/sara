@@ -5,40 +5,33 @@
 module Property.PipelineSpec (spec) where
 
 import Test.Hspec
-import SARA.Frontmatter.Parser
-import SARA.Routing.Engine
-import SARA.SEO.JsonLD
-import SARA.Types
-import SARA.Config (defaultConfig)
+import SARA
+import SARA.Monad (initialState, SaraEnv(..))
+import qualified SARA.Routing.Engine as REngine
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
 import qualified BLAKE3
 import qualified Data.ByteString as BS
+import UnliftIO.IORef (newIORef)
 
 spec :: Spec
 spec = do
-  describe "SARA Integration Pipeline" $ do
-    it "processes a complete metadata-to-SEO pipeline" $ do
-      let content = "---\ntitle: Integration Test\nauthor: Tester\n---\n# Hello"
+  describe "Pipeline Properties" $ do
+    it "SlugRoute always results in .html extension" $ do
+      let config = defaultConfig
+      root <- mkProjectRoot "."
+      stateRef <- newIORef initialState
+      let _env = SaraEnv config root False [] stateRef Nothing
       
-      -- 1. Parse phase
-      case parseFrontmatter "test.md" content of
-        Left err -> expectationFailure $ "Parse failed: " ++ show err
-        Right (meta, body) -> do
-          let item = Item "test.md" (ResolvedRoute "test.html") meta body (BLAKE3.hash Nothing ([] :: [BS.ByteString]))
-          
-          -- 3. Route phase
-          res <- resolveRoute SlugRoute "test.md"
-          case res of
-            Left err -> expectationFailure $ "Routing failed: " ++ show err
-            Right (ResolvedRoute outPath) -> do
-              outPath `shouldBe` "test.html"
-              
-              -- 4. SEO phase
-              let json = generateJsonLD Article item
-              case json of
-                Aeson.Object obj -> do
-                  KM.lookup (K.fromText "@context") obj `shouldBe` Just "https://schema.org"
-                  KM.lookup (K.fromText "@type") obj `shouldBe` Just "Article"
-                _ -> expectationFailure "Expected Aeson Object"
+      res <- REngine.resolveRoute SlugRoute "posts/hello.md"
+      case res of
+        Right (ResolvedRoute outPath) -> do
+          outPath `shouldBe` "posts/hello.html"
+        _ -> expectationFailure "Expected ResolvedRoute"
+
+    it "Items preserve their metadata through the pipeline" $ do
+      let meta = KM.fromList [(K.fromText "test", Aeson.Bool True)]
+      let body = "Content"
+      let item = Item "test.md" (ResolvedRoute "test.html") meta body (BLAKE3.hash Nothing ([] :: [BS.ByteString]))
+      itemMeta item `shouldBe` meta

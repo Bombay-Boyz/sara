@@ -7,7 +7,6 @@ module SARA.Migration.Hakyll
 
 import SARA.Error (SaraError(..), SaraErrorKind(..))
 import Data.Text (Text)
-import qualified Data.Text as T
 
 -- | Since Hakyll uses a Haskell DSL similar to SARA, migration is often
 --   a matter of remapping paths and updating site.hs.

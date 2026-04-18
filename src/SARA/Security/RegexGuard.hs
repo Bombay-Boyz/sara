@@ -74,11 +74,21 @@ hasAlternationInRepetition s = go s (0 :: Int) False
     go :: String -> Int -> Bool -> Bool
     go [] _ _ = False
     go (c:cs) depth hasAlt
-      | c == '(' = go cs (depth + 1) False || go cs depth hasAlt
+      | c == '(' = 
+          -- Start a new group scope; reset hasAlt for this group
+          go cs (depth + 1) False || go cs depth hasAlt
       | c == ')' = 
-          let isRepetition = not (null cs) && (head cs == '+' || head cs == '*')
-          in (hasAlt && isRepetition) || go cs (depth - 1) False
-      | c == '|' = (depth > 0) || go cs depth True
+          -- Check if THIS group (which may have had alternation) is quantified
+          let isQuantified = case cs of
+                ('+':_) -> True
+                ('*':_) -> True
+                ('{':_) -> True -- also catch {n,} quantifiers
+                _       -> False
+          -- FIX: only flag if this group had alternation AND is quantified
+          in (hasAlt && isQuantified) || go cs (max 0 (depth - 1)) False
+      | c == '|' = 
+          -- FIX: just record that we saw alternation at this depth, don't short-circuit
+          go cs depth True
       | otherwise = go cs depth hasAlt
 
 -- | Calculates nesting depth of quantifiers (specifically groups followed by + or *).

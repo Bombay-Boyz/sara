@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module SARA.Asset.Image
   ( processImage
@@ -14,6 +15,8 @@ import SARA.Types (ImageSpec(..), ImageFormat(..))
 import Control.Monad (forM_)
 import System.Directory (findExecutable)
 import Data.Maybe (isJust)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 
 -- | Checks if required image processing binaries are available.
 verifyImageBinaries :: IO [(ImageFormat, Bool)]
@@ -35,10 +38,6 @@ processImage spec (SafePath input) outBase = do
   let formats = if null (imgFormats spec) then [PNG] else imgFormats spec
   let widths  = if null (imgWidths spec)  then [0]   else imgWidths spec
   
-  -- We don't want to run verifyImageBinaries in every Action, 
-  -- but Shake handles caching if we use an Oracle or just assume they exist and fail gracefully.
-  -- To be robust, we check and log warnings.
-  
   forM_ formats $ \fmt -> do
     forM_ widths $ \w -> do
       let ext = formatToExt fmt
@@ -48,12 +47,13 @@ processImage spec (SafePath input) outBase = do
       validatePath input
       validatePath output
       
+      -- Industrial Grade: Handle missing binaries gracefully per-operation
       case fmt of
-        WebP -> safeCmd "cwebp" ["-q", show (imgQuality spec), input, "-o", output]
-        AVIF -> safeCmd "avifenc" ["--job", "0", input, output]
+        WebP -> (safeCmd "cwebp" ["-q", show (imgQuality spec), input, "-o", output]) `Development.Shake.actionOnException` (liftIO $ TIO.putStrLn $ "WARNING: cwebp failed for " <> T.pack output)
+        AVIF -> (safeCmd "avifenc" ["--job", "0", input, output]) `Development.Shake.actionOnException` (liftIO $ TIO.putStrLn $ "WARNING: avifenc failed for " <> T.pack output)
         _    -> if w == 0
                 then copyFile' input output
-                else safeCmd "convert" [input, "-resize", show w, output]
+                else (safeCmd "convert" [input, "-resize", show w, output]) `Development.Shake.actionOnException` (liftIO $ TIO.putStrLn $ "WARNING: magick failed for " <> T.pack output)
 
 formatToExt :: ImageFormat -> String
 formatToExt = \case

@@ -57,14 +57,17 @@ splitBy sepLF sepCRLF sepBase t =
 splitJSON :: Text -> Either (SaraError 'EKFrontmatter) (Text, Text)
 splitJSON t = 
   let (fm, rest) = findJSONEnd t
+      -- FIX: Strip leading newline(s) from body to match YAML/TOML behavior
+      body = T.dropWhile (\c -> c == '\n' || c == '\r') rest
   in if T.null rest && not ("}" `T.isSuffixOf` T.strip fm)
      then Right (t, "") 
-     else Right (fm, rest)
+     else Right (fm, body)
 
 -- | Find the end of a JSON object by tracking brace depth.
 findJSONEnd :: Text -> (Text, Text)
-findJSONEnd t = go (T.unpack t) 0 []
+findJSONEnd t = go (T.unpack t) (0 :: Int) []
   where
+    go :: String -> Int -> String -> (Text, Text)
     go [] _ acc = (T.pack (reverse acc), "")
     go (c:cs) depth acc
       | c == '{' = go cs (depth + 1) (c:acc)

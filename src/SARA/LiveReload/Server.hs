@@ -12,7 +12,7 @@ module SARA.LiveReload.Server
 import Control.Concurrent (MVar, newMVar, modifyMVar_)
 import Control.Concurrent.Async (forConcurrently)
 import Control.Monad (forever, void)
-import Control.Exception (handle, SomeException)
+import Control.Exception (handle, SomeException, finally)
 import qualified Network.WebSockets as WS
 import qualified Network.Wai.Handler.WebSockets as WaiWS
 import Network.Wai (Application, responseLBS, pathInfo, remoteHost)
@@ -29,6 +29,8 @@ import qualified Data.Map.Strict as Map
 import Network.Socket (SockAddr(..))
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
+import System.Directory (doesFileExist)
+import System.FilePath ((</>))
 
 data ManagedClient = ManagedClient
   { mcConn :: !WS.Connection
@@ -71,7 +73,10 @@ broadcastToPath clientsMVar path msg = modifyMVar_ clientsMVar $ \clientMap -> d
   let payload = Aeson.encode msg
   let targetClients = Map.keys $ Map.filter (== path) clientMap
   results <- forConcurrently targetClients (sendMessage payload)
-  pure clientMap 
+  let successfulTargetClients = [c | (c, True) <- zip targetClients results]
+  -- Industrial fix: prune target clients that failed
+  let prunnedMap = Map.filterWithKey (\c p -> p /= path || c `elem` successfulTargetClients) clientMap
+  pure prunnedMap
   where
     sendMessage payload client = handle (\(_ :: SomeException) -> pure False) $ do
       WS.sendDataMessage (mcConn client) (WS.Text payload Nothing)
@@ -82,13 +87,19 @@ broadcastReload :: MVar ClientList -> IO ()
 broadcastReload mvar = broadcastMessage mvar (Aeson.object ["type" Aeson..= ("reload" :: Text)])
 
 -- | Wai application that serves static files and handles WebSockets.
+
 liveReloadApp :: MVar ClientList -> FilePath -> Application
-liveReloadApp clientsMVar siteDir req respond =
-  case pathInfo req of
-    ["sara"] -> 
-      if isLoopback (remoteHost req)
-      then respond $ responseLBS status200 [("Content-Type", "text/html")] (BSL.fromStrict $ TE.encodeUtf8 dashboardHtml)
-      else respond $ responseLBS status403 [("Content-Type", "text/plain")] "Access denied: Localhost only"
+liveReloadApp clientsMVar siteDir req respond = do
+  let path = pathInfo req
+  case path of
+    [".sara-internal"] -> do
+      -- Fix H-06: Check if user has a file at this path before hijacking
+      userFileExists <- doesFileExist (siteDir </> ".sara-internal")
+      if userFileExists
+        then staticApp siteDir req respond
+        else if isLoopback (remoteHost req)
+             then respond $ responseLBS status200 [("Content-Type", "text/html")] (BSL.fromStrict $ TE.encodeUtf8 dashboardHtml)
+             else respond $ responseLBS status403 [("Content-Type", "text/plain")] "Access denied: Localhost only"
     _ -> WaiWS.websocketsOr WS.defaultConnectionOptions 
           (\pending -> if WS.requestPath (WS.pendingRequest pending) == "/live"
                        then wsApp clientsMVar pending
@@ -114,7 +125,10 @@ wsApp clientsMVar pending = do
        let client = ManagedClient conn newId
        modifyMVar_ clientsMVar $ \clientMap -> pure (Map.insert client path clientMap)
        putStrLn $ "Client subscribed to " ++ T.unpack path
-       handle (\(_ :: SomeException) -> pure ()) $ forever $ void (WS.receiveData conn :: IO Text)
+       -- Industrial fix: ensure client is removed on disconnect
+       handle (\(_ :: SomeException) -> return ()) $ 
+         finally (forever $ void (WS.receiveData conn :: IO Text)) $
+           modifyMVar_ clientsMVar $ \clientMap -> pure (Map.delete client clientMap)
     _ -> WS.sendClose conn ("Expected subscribe message" :: Text)
 
 toDataKeyMap :: KM.KeyMap Aeson.Value -> Map.Map Text Aeson.Value
@@ -149,20 +163,30 @@ dashboardHtml = T.unlines
   , "    </div>"
   , "  </div>"
   , "  <script>"
-  , "    const socket = new WebSocket('ws://' + location.host + '/live');"
-  , "    socket.onopen = () => socket.send(JSON.stringify({path: '/sara'}));"
-  , "    socket.onmessage = (event) => {"
-  , "      const msg = JSON.parse(event.data);"
-  , "      if (msg.type === 'quality-seal') {"
-  , "        const data = msg.data;"
-  , "        document.getElementById('security').innerText = data.qsSecurity ? 'IRONCLAD' : 'VULNERABLE';"
-  , "        document.getElementById('security').className = data.qsSecurity ? 'val status-ok' : 'val status-fail';"
-  , "        document.getElementById('seo').innerText = data.qsSEO ? 'PASS' : 'ISSUES';"
-  , "        document.getElementById('seo').className = data.qsSEO ? 'val status-ok' : 'val status-warn';"
-  , "        document.getElementById('perf').innerText = data.qsPerformance + '/100';"
-  , "        document.getElementById('pages').innerText = data.qsItemCount;"
-  , "      }"
-  , "    };"
+  , "    function connect() {"
+  , "      const socket = new WebSocket('ws://' + location.host + '/live');"
+  , "      socket.onopen = () => {"
+  , "        console.log('SARA: Connected to health monitor');"
+  , "        socket.send(JSON.stringify({path: '/.sara-internal'}));"
+  , "      };"
+  , "      socket.onmessage = (event) => {"
+  , "        const msg = JSON.parse(event.data);"
+  , "        if (msg.type === 'quality-seal') {"
+  , "          const data = msg.data;"
+  , "          document.getElementById('security').innerText = data.qsSecurity ? 'IRONCLAD' : 'VULNERABLE';"
+  , "          document.getElementById('security').className = data.qsSecurity ? 'val status-ok' : 'val status-fail';"
+  , "          document.getElementById('seo').innerText = data.qsSEO ? 'PASS' : 'ISSUES';"
+  , "          document.getElementById('seo').className = data.qsSEO ? 'val status-ok' : 'val status-warn';"
+  , "          document.getElementById('perf').innerText = data.qsPerformance + '/100';"
+  , "          document.getElementById('pages').innerText = data.qsItemCount;"
+  , "        }"
+  , "      };"
+  , "      socket.onclose = () => {"
+  , "        console.log('SARA: Connection lost. Reconnecting in 2s...');"
+  , "        setTimeout(connect, 2000);"
+  , "      };"
+  , "    }"
+  , "    connect();"
   , "  </script>"
   , "</body>"
   , "</html>"

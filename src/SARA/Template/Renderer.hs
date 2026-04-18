@@ -16,21 +16,22 @@ import Development.Shake
 import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
+import System.Directory (canonicalizePath)
 import qualified Text.Mustache as Mustache
-import qualified Text.Mustache.Type as Mustache
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
-import SARA.Monad (SaraEnv(..), SaraState(..), SPath)
-import SARA.Error (SaraError(..), SaraErrorKind(..))
+import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Monad (SaraEnv(..), SaraState(..))
+import SARA.Error (SaraError(..), SaraErrorKind(..), AnySaraError(..), renderAnyErrorColor)
 import UnliftIO.IORef
-import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
-import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
+import Control.Concurrent.MVar (modifyMVar)
 import qualified UnliftIO.Exception as E
+import Control.Exception (SomeAsyncException, throwIO)
 import qualified Text.Megaparsec as MP
 
 newtype TemplateOracle = TemplateOracle FilePath
@@ -38,14 +39,18 @@ newtype TemplateOracle = TemplateOracle FilePath
 
 type instance RuleResult TemplateOracle = FilePath
 
-addTemplateOracle :: Rules ()
-addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
+addTemplateOracle :: SaraEnv -> Rules ()
+addTemplateOracle env = void $ addOracle $ \(TemplateOracle path) -> do
   need [path]
-  content <- liftIO $ TIO.readFile path
-  let auditErrors = auditTemplateForRawInterpolation path content
-  case auditErrors of
-    [] -> pure path
-    errs -> fail $ "Security audit failed for template " ++ path ++ ": " ++ show errs
+  res <- liftIO $ guardPath (envRoot env) path
+  case res of
+    Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
+    Right safePath -> do
+      content <- liftIO $ TIO.readFile (unSafePath safePath)
+      let auditErrors = auditTemplateForRawInterpolation path content
+      case auditErrors of
+        [] -> pure path
+        errs -> fail $ "Security audit failed for template " ++ path ++ ": " ++ show errs
 
 renderTemplate
   :: SaraEnv
@@ -54,7 +59,8 @@ renderTemplate
   -> Action (Either (SaraError 'EKTemplate) Text)
 renderTemplate env tplPathString ctx = do
   _ <- askOracle (TemplateOracle tplPathString)
-  let tplPath = T.pack tplPathString
+  absTpl <- liftIO $ canonicalizePath tplPathString
+  let tplPath = T.pack absTpl
   
   -- 1. Get the pre-initialized MVar for this specific template path (Fix U-02)
   state <- liftIO $ readIORef (envState env)
@@ -69,6 +75,7 @@ renderTemplate env tplPathString ctx = do
                    [ E.Handler $ \(e :: Mustache.MustacheException) -> 
                        let (ln, col, msg) = extractMustacheErrorDetails e
                        in return $ Left $ TemplateCompileError tplPath ln col msg
+                   , E.Handler $ \(e :: SomeAsyncException) -> throwIO e
                    , E.Handler $ \(e :: E.SomeException) -> 
                        return $ Left $ TemplateCompileError tplPath Nothing Nothing (T.pack $ show e)
                    ]
@@ -83,7 +90,5 @@ renderTemplate env tplPathString ctx = do
 
 -- | Extract line, column and message from MustacheException if possible.
 extractMustacheErrorDetails :: Mustache.MustacheException -> (Maybe Int, Maybe Int, Text)
-extractMustacheErrorDetails e = case e of
-  Mustache.MustacheParserException bundle ->
+extractMustacheErrorDetails (Mustache.MustacheParserException bundle) =
     (Nothing, Nothing, T.pack $ MP.errorBundlePretty bundle)
-  _ -> (Nothing, Nothing, T.pack $ show e)

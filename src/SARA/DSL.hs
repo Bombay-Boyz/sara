@@ -16,17 +16,18 @@ module SARA.DSL
   , buildSitemap
   , buildRSS
   , loadData
+  , registerTaxonomy
+  , getTaxonomy
   , registerShortcode
   , imagePlaceholder
   , regexRoute
   , glob
   , void
-  , coerceToValidated
   , SPath
   ) where
 
 import SARA.Types
-import SARA.Monad (SaraM(..), SaraEnv(..), SaraState(..), RuleDecl(..), tellRule, commitRules, addItemDependency, readFileTracked, readTextFileTracked, SPath)
+import SARA.Monad (SaraM(..), SaraEnv(..), SaraState(..), RuleDecl(..), tellRule, commitRules, readFileTracked, readTextFileTracked)
 import SARA.Error (SaraError(..), AnySaraError(..), renderAnyErrorColor)
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
@@ -36,41 +37,69 @@ import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
 import UnliftIO.IORef (atomicModifyIORef', readIORef)
-import Control.Monad (void)
+import Control.Monad (void, forM_)
 import Control.Monad.Reader (ask)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
+import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
-import qualified Data.ByteString as BS
+import qualified Data.List as L
 import qualified BLAKE3
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Yaml as Yaml
-import System.FilePath (takeExtension, replaceExtension)
+import System.FilePath (takeExtension)
 import qualified SARA.Routing.Engine as REngine
 import UnliftIO.Exception (throwIO)
 
 -- | Match source files by glob and run logic for each.
 match
   :: GlobPattern
-  -> (SPath -> SaraM (Item 'Planning))
-  -> SaraM [Item 'Planning]
+  -> (SPath -> SaraM (Item v))
+  -> SaraM [Item v]
 match g f = do
+  env <- ask
   let patStr = T.unpack (unGlobPattern g)
   files <- liftIO $ map T.pack <$> globDir1 (compile patStr) "."
   items <- mapM f files
+  
+  -- Industrial fix: In planning mode, we must record these items in the cache
+  -- so collectOutputs can find their routed paths for the 'want' list.
+  if envIsPlanning env
+    then do
+      forM_ items $ \i -> do
+        liftIO $ atomicModifyIORef' (envState env) $ \s ->
+          (s { stateItemCache = Map.insert (itemPath i) (coerceToValidated' i) (stateItemCache s) }, ())
+    else return ()
+
   tellRule (RuleMatch g (coerceCompiler f))
   commitRules
   return items
 
 -- Helper to satisfy RuleMatch which expects 'Validated items for the oracle
-coerceCompiler :: (SPath -> SaraM (Item 'Planning)) -> (SPath -> SaraM (Item 'Validated))
+coerceCompiler :: (SPath -> SaraM (Item v)) -> (SPath -> SaraM (Item 'Validated))
 coerceCompiler f p = do
   item <- f p
-  return $ item { itemPath = itemPath item } -- This works because Item is a record
+  return $ Item
+    { itemPath = itemPath item
+    , itemRoute = itemRoute item
+    , itemMeta = itemMeta item
+    , itemBody = itemBody item
+    , itemHash = itemHash item
+    }
+
+-- | Internal helper to coerce any Item to Validated for the cache.
+coerceToValidated' :: Item v -> Item 'Validated
+coerceToValidated' item = Item
+  { itemPath = itemPath item
+  , itemRoute = itemRoute item
+  , itemMeta = itemMeta item
+  , itemBody = itemBody item
+  , itemHash = itemHash item
+  }
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
@@ -96,41 +125,45 @@ readMarkdownWith customHandler file = do
   case parseFrontmatter file content of
     Right (meta, body) -> do
       let rules = envRemapRules env
-      case Remap.remapMetadata rules (T.unpack file) meta of
-        Left err -> throwIO (AnySaraError err)
-        Right remappedMeta -> do
-          if envIsPlanning env
-            then -- During planning, we skip body rendering but keep metadata
-                 return $ Item
-                   { itemPath = file
-                   , itemRoute = ResolvedRoute (T.pack $ replaceExtension (T.unpack file) "html")
-                   , itemMeta = remappedMeta
-                   , itemBody = ""
-                   , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-                   }
-            else do
-              state <- readIORef (envState env)
-              let registry = stateShortcodeHandlers state
-              -- 2. Expand shortcodes with industrial image support + registry
-              let handler sc = case scName sc of
-                    "image" -> 
-                      let src = Map.findWithDefault "" "src" (scArgs sc)
-                          alt = Map.findWithDefault "" "alt" (scArgs sc)
-                          safeSrc = T.replace "__" "" src
-                          token = "__LQIP__:" <> safeSrc <> "__"
-                      in return $ "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
-                    name -> case Map.lookup name registry of
-                      Just h  -> h sc
-                      Nothing -> customHandler sc
+      let (warnings, remappedMeta) = Remap.remapMetadata rules (T.unpack file) meta
+      -- Emit warnings but don't fail
+      forM_ warnings (\w -> liftIO $ TIO.putStrLn (renderAnyErrorColor (AnySaraError w)))
+      
+      -- Industrial fix: We always parse the body to ensure shortcodes are expanded
+      -- and metadata is fully available even during planning.
+      state <- readIORef (envState env)
+      let registry = stateShortcodeHandlers state
+          -- 2. Expand shortcodes with industrial image support + registry
+          handler sc = case scName sc of
+                "image" -> 
+                  let src = Map.findWithDefault "" "src" (scArgs sc)
+                      alt = Map.findWithDefault "" "alt" (scArgs sc)
+                      safeSrc = T.replace "__" "" src
+                      token = "{{SARA_LQIP:" <> safeSrc <> "}}"
+                  in return $ "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
+                name -> case Map.lookup name registry of
+                  Just h  -> h sc
+                  Nothing -> customHandler sc
 
-              htmlBody <- parseMarkdown handler (T.unpack file) body
-              return $ Item
-                { itemPath = file
-                , itemRoute = ResolvedRoute (T.pack $ replaceExtension (T.unpack file) "html")
-                , itemMeta = remappedMeta
-                , itemBody = htmlBody
-                , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-                }
+      htmlBody <- parseMarkdown handler (T.unpack file) body
+      
+      if envIsPlanning env
+        then -- During planning, we keep metadata AND body
+             return $ Item
+               { itemPath = file
+               , itemRoute = UnresolvedRoute
+               , itemMeta = remappedMeta
+               , itemBody = htmlBody
+               , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
+               }
+        else do
+          return $ Item
+            { itemPath = file
+            , itemRoute = UnresolvedRoute
+            , itemMeta = remappedMeta
+            , itemBody = htmlBody
+            , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
+            }
     Left err -> throwIO (AnySaraError err)
 
 -- | Validate SEO properties.
@@ -138,10 +171,7 @@ validateSEO :: Item 'Planning -> SaraM (Item 'Validated)
 validateSEO item = do
   env <- ask
   if envIsPlanning env
-    then -- During planning, we just pass it through as unvalidated for the DSL
-         -- But the type system needs 'Validated to continue?
-         -- No, buildSitemap etc should take 'Planning.
-         return $ Item
+    then return $ Item
            { itemPath = itemPath item
            , itemRoute = itemRoute item
            , itemMeta = itemMeta item
@@ -175,17 +205,35 @@ validateSEO item = do
 -- | Render an Item through a template.
 render :: SPath -> Item 'Validated -> SaraM ()
 render tpl item = do
-  let outPath = case itemRoute item of
+  -- If item has UnresolvedRoute, apply default SlugRoute
+  resolvedItem <- case itemRoute item of
+    UnresolvedRoute -> do
+      res <- liftIO $ REngine.resolveRoute SlugRoute (T.unpack $ itemPath item)
+      case res of
+        Right r -> return $ item { itemRoute = r }
+        Left err -> throwIO (AnySaraError err)
+    _ -> return item
+  let outPath = case itemRoute resolvedItem of
                   ResolvedRoute p -> p
-  tellRule (RuleRender tpl item outPath)
+                  _               -> error "impossible: route should be resolved here"
+  tellRule (RuleRender tpl resolvedItem outPath)
   commitRules
 
 -- | Render an Item using a custom Haskell-based renderer.
 renderWith :: (Item 'Validated -> Text) -> Item 'Validated -> SaraM ()
 renderWith renderer item = do
-  let outPath = case itemRoute item of
+  -- Similar deferred resolution for renderWith
+  resolvedItem <- case itemRoute item of
+    UnresolvedRoute -> do
+      res <- liftIO $ REngine.resolveRoute SlugRoute (T.unpack $ itemPath item)
+      case res of
+        Right r -> return $ item { itemRoute = r }
+        Left err -> throwIO (AnySaraError err)
+    _ -> return item
+  let outPath = case itemRoute resolvedItem of
                   ResolvedRoute p -> p
-  tellRule (RuleRenderRaw (renderer item) item outPath)
+                  _               -> error "impossible"
+  tellRule (RuleRenderRaw (renderer resolvedItem) resolvedItem outPath)
   commitRules
 
 -- | Register metadata remapping rules.
@@ -193,26 +241,40 @@ remapMetadata :: [(Text, Text)] -> SaraM ()
 remapMetadata rules = tellRule (RuleRemap rules) >> commitRules
 
 -- | Register a search index generation rule.
-buildSearchIndex :: SPath -> [Item 'Planning] -> SaraM ()
-buildSearchIndex outPath ps = tellRule (RuleSearch outPath (map coerceToValidated ps)) >> commitRules
+buildSearchIndex :: SPath -> [Item 'Validated] -> SaraM ()
+buildSearchIndex outPath ps = tellRule (RuleSearch outPath ps) >> commitRules
 
 -- | Register a sitemap.xml generation rule.
-buildSitemap :: SPath -> [Item 'Planning] -> SaraM ()
-buildSitemap outPath ps = tellRule (RuleSitemap outPath (map coerceToValidated ps)) >> commitRules
+buildSitemap :: SPath -> [Item 'Validated] -> SaraM ()
+buildSitemap outPath ps = tellRule (RuleSitemap outPath ps) >> commitRules
 
 -- | Register an RSS feed generation rule.
-buildRSS :: SPath -> FeedConfig -> [Item 'Planning] -> SaraM ()
-buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg (map coerceToValidated ps)) >> commitRules
+buildRSS :: SPath -> FeedConfig -> [Item 'Validated] -> SaraM ()
+buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps) >> commitRules
 
--- | Helper to satisfy Rule constructors which still expect 'Validated for the execution pass
-coerceToValidated :: Item 'Planning -> Item 'Validated
-coerceToValidated item = Item
-  { itemPath = itemPath item
-  , itemRoute = itemRoute item
-  , itemMeta = itemMeta item
-  , itemBody = itemBody item
-  , itemHash = itemHash item
-  }
+-- | Register a taxonomy (e.g., "tags") and group items by it.
+registerTaxonomy :: Text -> [Item v] -> SaraM ()
+registerTaxonomy key items = do
+  env <- ask
+  let taxMap = L.foldl' groupItem Map.empty items
+  let tax = Taxonomy key taxMap
+  atomicModifyIORef' (envState env) $ \s ->
+    (s { stateTaxonomies = Map.insert key tax (stateTaxonomies s) }, ())
+  where
+    groupItem acc item =
+      let meta = itemMeta item
+          vals = case KM.lookup (K.fromText key) meta of
+                   Just (Aeson.String v) -> [v]
+                   Just (Aeson.Array arr) -> [ v | Aeson.String v <- V.toList arr ]
+                   _ -> []
+      in L.foldl' (\a v -> Map.insertWith (++) v [itemPath item] a) acc vals
+
+-- | Retrieve a registered taxonomy.
+getTaxonomy :: Text -> SaraM (Maybe Taxonomy)
+getTaxonomy key = do
+  env <- ask
+  state <- readIORef (envState env)
+  return $ Map.lookup key (stateTaxonomies state)
 
 -- | Loads structured data (JSON or YAML) from a file.
 --   Automatically tracks dependencies in Shake.
@@ -243,7 +305,7 @@ registerShortcode name handler = do
 
 -- | Generates a Base64 LQIP magic token for an image.
 imagePlaceholder :: SPath -> SaraM Text
-imagePlaceholder path = return $ "__LQIP__:" <> path <> "__"
+imagePlaceholder path = return $ "{{SARA_LQIP:" <> path <> "}}"
 
 -- | Smart constructor for regex routes.
 regexRoute :: Text -> Text -> SaraM (Route 'Abstract)

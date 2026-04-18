@@ -4,7 +4,6 @@ module Integration.MigrationSpec (spec) where
 
 import Test.Hspec
 import SARA.Migration.Jekyll
-import Data.Text (Text)
 
 spec :: Spec
 spec = do
@@ -21,5 +20,6 @@ spec = do
 
     it "translates link tags" $ do
       let input = "[link]({% link _posts/page.md %})"
-      let expected = "[link](_posts/page.md)" 
+      let expected = "[link](/posts/page.html)"
       translateJekyllShortcodes "test.md" input `shouldBe` Right expected
+

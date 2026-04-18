@@ -4,8 +4,6 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-partial-fields #-}
-
 module SARA.Error
   ( SaraError(..)
   , SaraErrorKind(..)
@@ -56,97 +54,97 @@ data SaraError (k :: SaraErrorKind) where
 
   -- Frontmatter errors
   FrontmatterUnknownFormat
-    :: { fmFile :: !SPath }
+    :: !SPath
     -> SaraError 'EKFrontmatter
   FrontmatterParseFailure
-    :: { fmFile :: !SPath, fmPos :: !SourcePos, fmDetail :: !Text }
+    :: !SPath -> !SourcePos -> !Text
     -> SaraError 'EKFrontmatter
   FrontmatterRemapMissing
-    :: { fmFile :: !SPath, fmFrom :: !Text }
+    :: !SPath -> !Text
     -> SaraError 'EKFrontmatter
 
   -- Routing errors
   RouteRegexInvalid
-    :: { rtPattern :: !Text, rtDetail :: !Text }
+    :: !Text -> !Text
     -> SaraError 'EKRouting
   RouteConflict
-    :: { rtFile1 :: !SPath, rtFile2 :: !SPath, rtOutput :: !FilePath }
+    :: !SPath -> !SPath -> !FilePath
     -> SaraError 'EKRouting
 
   -- Markdown errors
   MarkdownUnsupportedExtension
-    :: { mdFile :: !SPath, mdPos :: !SourcePos, mdFeature :: !Text }
+    :: !SPath -> !SourcePos -> !Text
     -> SaraError 'EKMarkdown
 
   -- Template errors
   TemplateNotFound
-    :: { tplName :: !SPath }
+    :: !SPath
     -> SaraError 'EKTemplate
   TemplateCompileError
-    :: { tplCompileName :: !SPath, tplCompileLine :: !(Maybe Int), tplCompileCol :: !(Maybe Int), tplCompileDetail :: !Text }
+    :: !SPath -> !(Maybe Int) -> !(Maybe Int) -> !Text
     -> SaraError 'EKTemplate
   TemplateRenderFailure
-    :: { tplRenderName :: !SPath, tplRenderLine :: !(Maybe Int), tplRenderCol :: !(Maybe Int), tplRenderDetail :: !Text }
+    :: !SPath -> !(Maybe Int) -> !(Maybe Int) -> !Text
     -> SaraError 'EKTemplate
   TemplateKeyMissing
-    :: { tplName :: !SPath, tplKey :: !Text }
+    :: !SPath -> !Text
     -> SaraError 'EKTemplate
   TemplateUnsafeInterpolation
-    :: { tplName :: !SPath, tplLine :: !Int }
+    :: !SPath -> !Int
     -> SaraError 'EKTemplate
 
   -- SEO errors
   SEOAltMissing
-    :: { seoFile :: !SPath, seoPos :: !SourcePos, seoSrc :: !Text }
+    :: !SPath -> !SourcePos -> !Text
     -> SaraError 'EKSEO
   SEOHeadingSkip
-    :: { seoFile :: !SPath, seoPos :: !SourcePos, seoFrom :: !Int, seoTo :: !Int }
+    :: !SPath -> !SourcePos -> !Int -> !Int
     -> SaraError 'EKSEO
   SEOTitleMissing
-    :: { seoFile :: !SPath }
+    :: !SPath
     -> SaraError 'EKSEO
   SEODescriptionMissing
-    :: { seoFile :: !SPath }
+    :: !SPath
     -> SaraError 'EKSEO
 
   -- Validator errors
   ValidatorBrokenLink
-    :: { valFile :: !SPath, valPos :: !SourcePos, valTarget :: !FilePath }
+    :: !SPath -> !SourcePos -> !FilePath
     -> SaraError 'EKValidator
   ValidatorMissingAsset
-    :: { valFile :: !SPath, valPos :: !SourcePos, valSrc :: !Text }
+    :: !SPath -> !SourcePos -> !Text
     -> SaraError 'EKValidator
 
   -- Asset errors
   AssetProcessingFailed
-    :: { astFile :: !FilePath, astDetail :: !Text }
+    :: !FilePath -> !Text
     -> SaraError 'EKAsset
 
   -- Migration errors
   MigrationUnsupportedShortcode
-    :: { migFile :: !SPath, migShortcode :: !Text }
+    :: !SPath -> !Text
     -> SaraError 'EKMigration
 
   -- Config errors
   ConfigKeyMissing
-    :: { cfgKey :: !Text }
+    :: !Text
     -> SaraError 'EKConfig
 
   -- Security errors
   SecurityPathTraversal
-    :: { secFile :: !SPath, secAttempted :: !FilePath, secRoot :: !FilePath }
+    :: !SPath -> !FilePath -> !FilePath
     -> SaraError 'EKSecurity
   SecurityGlobEscape
-    :: { secGlob :: !Text, secReason :: !Text }
+    :: !Text -> !Text
     -> SaraError 'EKSecurity
   SecurityRegexReDoS
-    :: { secPattern :: !Text, secReason :: !Text }
+    :: !Text -> !Text
     -> SaraError 'EKSecurity
   SecurityShellInjection
-    :: { secPath :: !FilePath, secReason :: !Text }
+    :: !FilePath -> !Text
     -> SaraError 'EKSecurity
   SecurityUnsafeTemplate
-    :: { secTemplate :: !SPath, secLine :: !Int }
+    :: !SPath -> !Int
     -> SaraError 'EKSecurity
 
 -- | Existential wrapper so errors from all subsystems can be collected.
@@ -156,6 +154,37 @@ data AnySaraError where
 instance Exception AnySaraError
 
 deriving instance Show AnySaraError
+
+-- Manual Eq instance for existential wrapper
+instance Eq AnySaraError where
+  (AnySaraError e1) == (AnySaraError e2) = 
+    case (e1, e2) of
+      (FrontmatterUnknownFormat f1, FrontmatterUnknownFormat f2) -> f1 == f2
+      (FrontmatterParseFailure f1 p1 d1, FrontmatterParseFailure f2 p2 d2) -> f1 == f2 && p1 == p2 && d1 == d2
+      (FrontmatterRemapMissing f1 k1, FrontmatterRemapMissing f2 k2) -> f1 == f2 && k1 == k2
+      (RouteRegexInvalid p1 d1, RouteRegexInvalid p2 d2) -> p1 == p2 && d1 == d2
+      (RouteConflict f1a f1b o1, RouteConflict f2a f2b o2) -> f1a == f2a && f1b == f2b && o1 == o2
+      (MarkdownUnsupportedExtension f1 p1 fe1, MarkdownUnsupportedExtension f2 p2 fe2) -> f1 == f2 && p1 == p2 && fe1 == fe2
+      (TemplateNotFound t1, TemplateNotFound t2) -> t1 == t2
+      (TemplateCompileError t1 l1 c1 d1, TemplateCompileError t2 l2 c2 d2) -> t1 == t2 && l1 == l2 && c1 == c2 && d1 == d2
+      (TemplateRenderFailure t1 l1 c1 d1, TemplateRenderFailure t2 l2 c2 d2) -> t1 == t2 && l1 == l2 && c1 == c2 && d1 == d2
+      (TemplateKeyMissing t1 k1, TemplateKeyMissing t2 k2) -> t1 == t2 && k1 == k2
+      (TemplateUnsafeInterpolation t1 l1, TemplateUnsafeInterpolation t2 l2) -> t1 == t2 && l1 == l2
+      (SEOAltMissing f1 p1 s1, SEOAltMissing f2 p2 s2) -> f1 == f2 && p1 == p2 && s1 == s2
+      (SEOHeadingSkip f1 p1 fr1 t1, SEOHeadingSkip f2 p2 fr2 t2) -> f1 == f2 && p1 == p2 && fr1 == fr2 && t1 == t2
+      (SEOTitleMissing f1, SEOTitleMissing f2) -> f1 == f2
+      (SEODescriptionMissing f1, SEODescriptionMissing f2) -> f1 == f2
+      (ValidatorBrokenLink f1 p1 t1, ValidatorBrokenLink f2 p2 t2) -> f1 == f2 && p1 == p2 && t1 == t2
+      (ValidatorMissingAsset f1 p1 s1, ValidatorMissingAsset f2 p2 s2) -> f1 == f2 && p1 == p2 && s1 == s2
+      (AssetProcessingFailed f1 d1, AssetProcessingFailed f2 d2) -> f1 == f2 && d1 == d2
+      (MigrationUnsupportedShortcode f1 s1, MigrationUnsupportedShortcode f2 s2) -> f1 == f2 && s1 == s2
+      (ConfigKeyMissing k1, ConfigKeyMissing k2) -> k1 == k2
+      (SecurityPathTraversal f1 a1 r1, SecurityPathTraversal f2 a2 r2) -> f1 == f2 && a1 == a2 && r1 == r2
+      (SecurityGlobEscape g1 r1, SecurityGlobEscape g2 r2) -> g1 == g2 && r1 == r2
+      (SecurityRegexReDoS p1 r1, SecurityRegexReDoS p2 r2) -> p1 == p2 && r1 == r2
+      (SecurityShellInjection p1 r1, SecurityShellInjection p2 r2) -> p1 == p2 && r1 == r2
+      (SecurityUnsafeTemplate t1 l1, SecurityUnsafeTemplate t2 l2) -> t1 == t2 && l1 == l2
+      _ -> False
 
 deriving instance Show (SaraError k)
 deriving instance Eq (SaraError k)
@@ -198,7 +227,7 @@ errorColorAnsi = \case
 errorDetails :: SaraError k -> (Text, Text, Text, Maybe SourcePos)
 errorDetails = \case
   FrontmatterUnknownFormat f -> ("error", "E001", "Unknown frontmatter format in: " <> f, Nothing)
-  FrontmatterParseFailure f pos d -> ("error", "E002", d, Just pos)
+  FrontmatterParseFailure _ pos d -> ("error", "E002", d, Just pos)
   FrontmatterRemapMissing f k -> ("error", "E003", "Missing remap key '" <> k <> "' in: " <> f, Nothing)
   RouteRegexInvalid p d -> ("error", "E010", "Invalid regex pattern '" <> p <> "': " <> d, Nothing)
   RouteConflict f1 f2 out -> ("error", "E011", "Route conflict: both " <> f1 <> " and " <> f2 <> " map to " <> T.pack out, Nothing)
@@ -214,8 +243,8 @@ errorDetails = \case
   TemplateUnsafeInterpolation t ln -> ("error", "E033", "Unsafe raw interpolation detected in " <> t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))
   SEOAltMissing _ pos src -> ("warning", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)
   SEOHeadingSkip _ pos from to -> ("warning", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
-  SEOTitleMissing f -> ("warning", "W003", "Missing title", Just (SourcePos f 0 0))
-  SEODescriptionMissing f -> ("warning", "W004", "Missing description", Just (SourcePos f 0 0))
+  SEOTitleMissing f -> ("warning", "W003", "Missing title in: " <> f, Nothing)
+  SEODescriptionMissing f -> ("warning", "W004", "Missing description in: " <> f, Nothing)
   ValidatorBrokenLink _ pos target -> ("error", "V001", "Broken internal link to '" <> T.pack target <> "'", Just pos)
   ValidatorMissingAsset _ pos src -> ("error", "V002", "Missing asset reference '" <> src <> "'", Just pos)
   AssetProcessingFailed f d -> ("error", "A001", "Asset processing failed for " <> T.pack f <> ": " <> d, Nothing)

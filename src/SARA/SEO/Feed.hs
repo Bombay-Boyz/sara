@@ -5,7 +5,7 @@ module SARA.SEO.Feed
   ( generateRSS
   ) where
 
-import SARA.Types (Item(..), FeedConfig(..), SPath, Route(..))
+import SARA.Types (Item(..), FeedConfig(..), Route(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -33,6 +33,7 @@ renderItem :: FeedConfig -> Item v -> Text
 renderItem cfg item =
   let path = case itemRoute item of
                ResolvedRoute p -> p
+               UnresolvedRoute -> ""
       fullUrl = if "/" `T.isSuffixOf` feedBaseUrl cfg
                 then feedBaseUrl cfg <> path
                 else feedBaseUrl cfg <> "/" <> path

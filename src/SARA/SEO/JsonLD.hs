@@ -9,7 +9,6 @@ module SARA.SEO.JsonLD
 
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
-import qualified Data.Text as T
 import GHC.Generics (Generic)
 import SARA.Types (Item(..))
 import qualified Data.Aeson.KeyMap as KM

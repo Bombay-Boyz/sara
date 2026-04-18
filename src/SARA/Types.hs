@@ -2,13 +2,14 @@
 {-# LANGUAGE DataKinds      #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DeriveGeneric  #-}
-{-# OPTIONS_GHC -Wno-partial-fields #-}
-
 module SARA.Types
   ( ValidationState(..)
   , Item(..)
   , RouteState(..)
   , Route(..)
+  , routeRegex
+  , routeReplacement
+  , routeLiteralPath
   , SPath
   , AssetFormat(..)
   , AssetKind(..)
@@ -18,12 +19,20 @@ module SARA.Types
   , SafeRegex(..)
   , SomeAssetKind(..)
   , FeedConfig(..)
+  , Taxonomy(..)
   ) where
 
 import Data.Text (Text)
+import qualified Data.Map.Strict as Map
 import qualified Data.Aeson as Aeson
 import GHC.Generics (Generic)
 import qualified BLAKE3
+
+-- | A grouping of items by a specific metadata key (e.g., 'tags', 'categories').
+data Taxonomy = Taxonomy
+  { taxKey   :: !Text
+  , taxMap   :: !(Map.Map Text [SPath])
+  } deriving (Show, Generic)
 
 -- | Industrial path type using Text for performance and safety.
 type SPath = Text
@@ -47,22 +56,29 @@ newtype SafeRegex = SafeRegex Text deriving (Eq, Show)
 -- | A route is either a pattern (abstract) or a concrete output path (resolved).
 data Route (s :: RouteState) where
   -- Abstract routes (declared in DSL)
-  SlugRoute   :: Route 'Abstract
-  PrettyRoute :: Route 'Abstract
-  RegexRoute
-    :: { rrSafeRegex     :: !SafeRegex
-       , rrReplacement   :: !Text
-       }
-    -> Route 'Abstract
-  LiteralRoute
-    :: { lrPath :: !SPath }
-    -> Route 'Abstract
+  SlugRoute     :: Route 'Abstract
+  PrettyRoute   :: Route 'Abstract
+  RegexRoute    :: !SafeRegex -> !Text -> Route 'Abstract
+  LiteralRoute  :: !SPath -> Route 'Abstract
 
   -- Resolved routes (produced by the routing engine)
-  ResolvedRoute
-    :: { resolvedPath :: !SPath
-       }
-    -> Route 'Resolved
+  UnresolvedRoute :: Route 'Resolved
+  ResolvedRoute :: !SPath -> Route 'Resolved
+
+-- | Safe accessor for RegexRoute's SafeRegex.
+routeRegex :: Route 'Abstract -> Maybe SafeRegex
+routeRegex (RegexRoute r _) = Just r
+routeRegex _                = Nothing
+
+-- | Safe accessor for RegexRoute's replacement text.
+routeReplacement :: Route 'Abstract -> Maybe Text
+routeReplacement (RegexRoute _ t) = Just t
+routeReplacement _                = Nothing
+
+-- | Safe accessor for LiteralRoute's path.
+routeLiteralPath :: Route 'Abstract -> Maybe SPath
+routeLiteralPath (LiteralRoute p) = Just p
+routeLiteralPath _                = Nothing
 
 deriving instance Show (Route s)
 deriving instance Eq (Route s)

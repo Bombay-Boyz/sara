@@ -33,7 +33,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError(..), SaraError(..), SaraErrorKind(..), SourcePos(..))
-import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Route(..))
+import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Taxonomy(..))
 import qualified Text.Mustache as Mustache
 import UnliftIO.MVar (MVar)
 import GHC.Generics (Generic)
@@ -56,6 +56,7 @@ data SaraState = SaraState
   , stateTemplateCache :: !(Map.Map SPath (MVar (Maybe (Either (SaraError 'EKTemplate) Mustache.Template))))
   , stateCurrentDeps   :: ![SPath]
   , stateShortcodeHandlers :: !(Map.Map Text (Shortcode -> SaraM Text))
+  , stateTaxonomies        :: !(Map.Map Text Taxonomy)
   } deriving (Generic)
 
 initialState :: SaraState
@@ -69,6 +70,7 @@ initialState = SaraState
   , stateTemplateCache = Map.empty
   , stateCurrentDeps = []
   , stateShortcodeHandlers = Map.empty
+  , stateTaxonomies = Map.empty
   }
 
 -- | Read-only environment for SARA.
@@ -78,6 +80,7 @@ data SaraEnv = SaraEnv
   , envIsPlanning :: !Bool
   , envRemapRules :: ![(Text, Text)]
   , envState      :: !(IORef SaraState)
+  , envJobs       :: !(Maybe Int)
   }
 
 -- | The SARA monad stack for rule declaration.

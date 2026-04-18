@@ -29,7 +29,8 @@ prop_pathGuard_exhaustive = do
     ]
   let path = joinPath comps
   let root = ProjectRoot "/app/root"
-  case guardPath root path of
+  res <- liftIO $ guardPath root path
+  case res of
     Right (SafePath p) -> do
       -- Invariant: A SafePath must NOT contain '..'
       let segments = splitDirectories p
