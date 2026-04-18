@@ -2,6 +2,7 @@ module SARA.Security.RegexGuard
   ( SafeRegex
   , mkSafeRegex
   , unSafeRegex
+  , compileSafeRegex
   ) where
 
 import Data.Text (Text)
@@ -21,6 +22,10 @@ mkSafeRegex t = do
     Right _ -> return $ 
       -- 2. Structural complexity check (Heuristic)
       checkComplexity t
+
+-- | Compiles and validates a regex.
+compileSafeRegex :: Text -> IO (Either (SaraError 'EKSecurity) SafeRegex)
+compileSafeRegex = mkSafeRegex
 
 -- | Unwrap.
 unSafeRegex :: SafeRegex -> Text

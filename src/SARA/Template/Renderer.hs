@@ -16,14 +16,13 @@ import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
 import qualified Text.Mustache as Mustache
-import qualified Text.Mustache.Type as Mustache
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
-import SARA.Monad (SaraEnv(..), SaraState(..))
+import SARA.Monad (SaraEnv(..), SaraState(..), SPath)
 import SARA.Error (SaraError(..), SaraErrorKind(..))
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
@@ -50,8 +49,9 @@ renderTemplate
   -> FilePath
   -> Aeson.Value
   -> Action (Either (SaraError 'EKTemplate) Text)
-renderTemplate env tplPath ctx = do
-  _ <- askOracle (TemplateOracle tplPath)
+renderTemplate env tplPathString ctx = do
+  _ <- askOracle (TemplateOracle tplPathString)
+  let tplPath = T.pack tplPathString
   
   -- 1. Get or create the MVar for this specific template path
   mvar <- liftIO $ atomicModifyIORef' (envState env) $ \s ->
@@ -66,7 +66,7 @@ renderTemplate env tplPath ctx = do
     Just res -> return (Just res, res)
     Nothing -> do
       -- This is the first thread to reach here
-      res <- (Right <$> Mustache.compileMustacheFile tplPath) `E.catches` 
+      res <- (Right <$> Mustache.compileMustacheFile tplPathString) `E.catches` 
                [ E.Handler $ \(e :: Mustache.MustacheException) -> 
                    let (ln, col, msg) = extractMustacheErrorDetails e
                    in return $ Left $ TemplateCompileError tplPath ln col msg

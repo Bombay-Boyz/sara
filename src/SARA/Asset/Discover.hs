@@ -9,6 +9,7 @@ module SARA.Asset.Discover
 import SARA.Types
 import SARA.Monad
 import System.FilePath (takeExtension)
+import qualified Data.Text as T
 
 -- | Glob-based auto-discovery.
 discoverAssets
@@ -17,17 +18,19 @@ discoverAssets
 discoverAssets g = tellRule (RuleDiscover g)
 
 -- | Infers kind based on extension.
-inferAssetKind :: FilePath -> SomeAssetKind
-inferAssetKind path = case takeExtension path of
-  ".png"   -> SomeAssetKind (ImageAsset (ImageSpec [] [PNG] 80))
-  ".jpg"   -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
-  ".jpeg"  -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
-  ".css"   -> SomeAssetKind StyleAsset
-  ".js"    -> SomeAssetKind ScriptAsset
-  ".mjs"   -> SomeAssetKind ScriptAsset
-  ".woff"  -> SomeAssetKind FontAsset
-  ".woff2" -> SomeAssetKind FontAsset
-  ".ttf"   -> SomeAssetKind FontAsset
-  ".json"  -> SomeAssetKind DataAsset
-  ".xml"   -> SomeAssetKind DataAsset
-  _        -> SomeAssetKind GenericAsset
+inferAssetKind :: SPath -> SomeAssetKind
+inferAssetKind pathText = 
+  let path = T.unpack pathText
+  in case takeExtension path of
+    ".png"   -> SomeAssetKind (ImageAsset (ImageSpec [] [PNG] 80))
+    ".jpg"   -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
+    ".jpeg"  -> SomeAssetKind (ImageAsset (ImageSpec [] [JPEG] 80))
+    ".css"   -> SomeAssetKind StyleAsset
+    ".js"    -> SomeAssetKind ScriptAsset
+    ".mjs"   -> SomeAssetKind ScriptAsset
+    ".woff"  -> SomeAssetKind FontAsset
+    ".woff2" -> SomeAssetKind FontAsset
+    ".ttf"   -> SomeAssetKind FontAsset
+    ".json"  -> SomeAssetKind DataAsset
+    ".xml"   -> SomeAssetKind DataAsset
+    _        -> SomeAssetKind GenericAsset

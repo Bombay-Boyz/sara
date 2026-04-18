@@ -9,6 +9,7 @@ module SARA.Types
   , Item(..)
   , RouteState(..)
   , Route(..)
+  , SPath
   , AssetFormat(..)
   , AssetKind(..)
   , ImageSpec(..)
@@ -24,11 +25,14 @@ import qualified Data.Aeson as Aeson
 import GHC.Generics (Generic)
 import qualified BLAKE3
 
+-- | Industrial path type using Text for performance and safety.
+type SPath = Text
+
 -- | 'v' is a phantom type: 'Unvalidated or 'Validated.
 data ValidationState = Unvalidated | Validated
 
 data Item (v :: ValidationState) = Item
-  { itemPath     :: !FilePath
+  { itemPath     :: !SPath
   , itemRoute    :: !(Route 'Resolved)
   , itemMeta     :: !Aeson.Object
   , itemBody     :: !Text
@@ -51,12 +55,12 @@ data Route (s :: RouteState) where
        }
     -> Route 'Abstract
   LiteralRoute
-    :: { lrPath :: !FilePath }
+    :: { lrPath :: !SPath }
     -> Route 'Abstract
 
   -- Resolved routes (produced by the routing engine)
   ResolvedRoute
-    :: { resolvedPath :: !FilePath
+    :: { resolvedPath :: !SPath
        }
     -> Route 'Resolved
 

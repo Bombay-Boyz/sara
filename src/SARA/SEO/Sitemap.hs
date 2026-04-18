@@ -4,28 +4,32 @@ module SARA.SEO.Sitemap
   ( generateSitemap
   ) where
 
-import SARA.Types (Item(..), Route(..))
+import SARA.Types (Item(..), SPath)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Text.XML as XML
-import qualified Data.Map as Map
-import Development.Shake (Action, liftIO)
+import qualified Data.Text.IO as TIO
+import SARA.Types (Route(..))
 
--- | Generates a sitemap.xml from validated items.
-generateSitemap
-  :: Text -- ^ Site Base URL
-  -> [Item v]
-  -> FilePath -- ^ Output path
-  -> Action ()
+-- | Generates a sitemap.xml file.
+generateSitemap :: Text -> [Item v] -> FilePath -> IO ()
 generateSitemap baseUrl items outPath = do
-  let urls = map (mkUrl baseUrl) items
-  let sitemap = XML.Document (XML.Prologue [] Nothing []) root []
-      root = XML.Element "{http://www.sitemaps.org/schemas/sitemap/0.9}urlset" Map.empty (map XML.NodeElement urls)
-  liftIO $ XML.writeFile XML.def outPath sitemap
+  let content = T.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
+        , T.unlines (map (renderUrl baseUrl) items)
+        , "</urlset>"
+        ]
+  TIO.writeFile outPath content
 
-mkUrl :: Text -> Item v -> XML.Element
-mkUrl baseUrl item =
-  let path = case itemRoute item of ResolvedRoute p -> T.pack p
-      loc = baseUrl <> if "/" `T.isPrefixOf` path then path else "/" <> path
-  in XML.Element "{http://www.sitemaps.org/schemas/sitemap/0.9}url" Map.empty
-       [ XML.NodeElement $ XML.Element "{http://www.sitemaps.org/schemas/sitemap/0.9}loc" Map.empty [XML.NodeContent loc] ]
+renderUrl :: Text -> Item v -> Text
+renderUrl baseUrl item =
+  let path = case itemRoute item of
+               ResolvedRoute p -> p
+      fullUrl = if "/" `T.isSuffixOf` baseUrl
+                then baseUrl <> path
+                else baseUrl <> "/" <> path
+  in T.unlines
+    [ "  <url>"
+    , "    <loc>" <> fullUrl <> "</loc>"
+    , "  </url>"
+    ]

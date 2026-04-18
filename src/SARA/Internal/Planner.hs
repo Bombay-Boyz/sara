@@ -14,8 +14,8 @@ module SARA.Internal.Planner
 import Development.Shake
 import Development.Shake.Classes
 import Development.Shake.FilePath
-import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..), SaraState(..), addItemDependency)
-import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..))
+import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..), SaraState(..), SPath)
+import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..), Route(..))
 import SARA.Config (SaraConfig(..))
 import SARA.Security.PathGuard (guardPath, unSafePath)
 import SARA.Security.ShellGuard (validatePath)
@@ -51,13 +51,13 @@ import Control.Exception (try, SomeException)
 collectOutputs :: SaraEnv -> [RuleDecl] -> [FilePath]
 collectOutputs env decls =
   let outDir = cfgOutputDirectory (envConfig env)
-  in [ outDir </> p | decl <- decls, p <- declToOutput decl ]
+  in [ outDir </> T.unpack p | decl <- decls, p <- declToOutput decl ]
   where
     declToOutput = \case
       RuleRender _ _ outPath -> [outPath]
       RuleRenderRaw _ _ outPath -> [outPath]
       RuleSearch outPath _ -> [outPath]
-      RulePartialSearch outPath _ -> [".cache" </> outPath]
+      RulePartialSearch outPath _ -> [T.pack (".cache" </> T.unpack outPath)]
       RuleSitemap outPath _ -> [outPath]
       RuleRSS outPath _ _ -> [outPath]
       _ -> []
@@ -91,7 +91,7 @@ translateDecl env = \case
   RuleDataDependency p -> genDataDependency env p
   RuleGlobal _         -> return ()
 
-genMatch :: SaraEnv -> GlobPattern -> (FilePath -> SaraM (Item 'Validated)) -> Rules ()
+genMatch :: SaraEnv -> GlobPattern -> (SPath -> SaraM (Item 'Validated)) -> Rules ()
 genMatch _ _ _ = return ()
 
 genDiscover :: SaraEnv -> GlobPattern -> Rules ()
@@ -105,8 +105,8 @@ genDiscover env g = do
       Right safeSrc -> do
         let out = outDir </> src
         liftIO $ atomicModifyIORef' (envState env) $ \s ->
-          (s { stateSiteGraph = HS.insert src (stateSiteGraph s) }, ())
-        case inferAssetKind src of
+          (s { stateSiteGraph = HS.insert (T.pack src) (stateSiteGraph s) }, ())
+        case inferAssetKind (T.pack src) of
           SomeAssetKind (ImageAsset spec) -> do
             out %> \o -> do
               need [unSafePath safeSrc]
@@ -122,23 +122,23 @@ genDiscover env g = do
               validatePath o
               copyFile' (unSafePath safeSrc) o
 
-genRender :: SaraEnv -> FilePath -> Item 'Validated -> FilePath -> Rules ()
+genRender :: SaraEnv -> SPath -> Item 'Validated -> SPath -> Rules ()
 genRender env tplPath item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> outPath
+  let fullOutPath = outDir </> T.unpack outPath
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
 
   fullOutPath %> \o -> do
     liftIO $ do
-      putStr $ "\r\ESC[2K  [RENDERING] " ++ outPath
+      putStr $ "\r\ESC[2K  [RENDERING] " ++ T.unpack outPath
       hFlush stdout
     -- Load the real item content
     realItem <- askItem env (itemPath item)
-    case guardPath (envRoot env) (itemPath realItem) of
+    case guardPath (envRoot env) (T.unpack $ itemPath realItem) of
       Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
       Right safeSrc -> do
-        case guardPath (envRoot env) tplPath of
+        case guardPath (envRoot env) (T.unpack tplPath) of
           Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
           Right safeTpl -> do
             needBlake3 [unSafePath safeSrc, unSafePath safeTpl]
@@ -160,7 +160,7 @@ genRender env tplPath item outPath = do
                 
                 state <- liftIO $ readIORef (envState env)
                 let linkIssues = checkInternalLinks (stateSiteGraph state) (itemPath realItem) outPath finalHtml
-                let seoResult = auditRenderedHTML outPath finalHtml
+                let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
                 case seoResult of
                   AuditIssues _ issues -> do
                     liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
@@ -173,10 +173,10 @@ genRender env tplPath item outPath = do
                         liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) linkIssues
                 writeFile' o (T.unpack finalHtml)
 
-genRenderRaw :: SaraEnv -> Text -> Item 'Validated -> FilePath -> Rules ()
+genRenderRaw :: SaraEnv -> Text -> Item 'Validated -> SPath -> Rules ()
 genRenderRaw env html item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> outPath
+  let fullOutPath = outDir </> T.unpack outPath
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
 
@@ -188,7 +188,7 @@ genRenderRaw env html item outPath = do
     
     state <- liftIO $ readIORef (envState env)
     let linkIssues = checkInternalLinks (stateSiteGraph state) (itemPath realItem) outPath finalHtml
-    let seoResult = auditRenderedHTML outPath finalHtml
+    let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
     case seoResult of
       AuditIssues _ issues -> do
         liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
@@ -217,26 +217,26 @@ findLQIPTokens t =
            (path, after) = T.breakOn "__" rest
        in path : findLQIPTokens (T.drop 2 after)
 
-genSearch :: SaraEnv -> FilePath -> [Item 'Validated] -> Rules ()
+genSearch :: SaraEnv -> SPath -> [Item 'Validated] -> Rules ()
 genSearch env outPath items = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> outPath
+  let fullOutPath = outDir </> T.unpack outPath
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   -- Register partial search rules for each item
   forM_ items $ \i -> do
-    genPartialSearch env (itemPath i ++ ".partial.json") i
+    genPartialSearch env (itemPath i <> ".partial.json") i
 
   fullOutPath %> \o -> do
-    let partials = map (\i -> outDir </> ".cache" </> (itemPath i ++ ".partial.json")) items
+    let partials = map (\i -> outDir </> ".cache" </> T.unpack (itemPath i <> ".partial.json")) items
     need partials
     mergePartialIndexes partials o
 
-genPartialSearch :: SaraEnv -> FilePath -> Item 'Validated -> Rules ()
+genPartialSearch :: SaraEnv -> SPath -> Item 'Validated -> Rules ()
 genPartialSearch env outPath item = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> ".cache" </> outPath
+  let fullOutPath = outDir </> ".cache" </> T.unpack outPath
   
   fullOutPath %> \o -> do
     -- During execution, load the real item
@@ -244,43 +244,42 @@ genPartialSearch env outPath item = do
     let (entry, content) = mkSearchEntry realItem
     generatePartialIndex entry content o
 
-genSitemap :: SaraEnv -> FilePath -> [Item 'Validated] -> Rules ()
+genSitemap :: SaraEnv -> SPath -> [Item 'Validated] -> Rules ()
 genSitemap env outPath items = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> outPath
+  let fullOutPath = outDir </> T.unpack outPath
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   fullOutPath %> \o -> do
     -- During execution, load real items
     realItems <- mapM (askItem env . itemPath) items
-    generateSitemap (cfgSiteUrl (envConfig env)) realItems o
+    liftIO $ generateSitemap (cfgSiteUrl (envConfig env)) realItems o
 
-genRSS :: SaraEnv -> FilePath -> FeedConfig -> [Item 'Validated] -> Rules ()
+genRSS :: SaraEnv -> SPath -> FeedConfig -> [Item 'Validated] -> Rules ()
 genRSS env outPath cfg items = do
   let outDir = cfgOutputDirectory (envConfig env)
-  let fullOutPath = outDir </> outPath
+  let fullOutPath = outDir </> T.unpack outPath
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   fullOutPath %> \o -> do
     -- During execution, load real items
     realItems <- mapM (askItem env . itemPath) items
-    generateRSS cfg realItems o
+    liftIO $ generateRSS cfg realItems o
 
-
-genDataDependency :: SaraEnv -> FilePath -> Rules ()
-genDataDependency _ path = action $ need [path]
+genDataDependency :: SaraEnv -> SPath -> Rules ()
+genDataDependency _ path = action $ need [T.unpack path]
 
 -- | Load a single item by its source path. Uses a cache and an Oracle for dependency tracking.
-askItem :: SaraEnv -> FilePath -> Action (Item 'Validated)
+askItem :: SaraEnv -> SPath -> Action (Item 'Validated)
 askItem env path = do
-  need [path]
-  askOracle (ItemOracle path)
+  need [T.unpack path]
+  askOracle (ItemOracle (T.unpack path))
   state <- liftIO $ readIORef (envState env)
   case Map.lookup path (stateItemCache state) of
     Just item -> return item
-    Nothing -> fail $ "ItemOracle succeeded but cache is empty for " ++ path
+    Nothing -> fail $ "ItemOracle succeeded but cache is empty for " ++ T.unpack path
 
 newtype ItemOracle = ItemOracle FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Generic)
@@ -291,7 +290,8 @@ addItemOracle :: SaraEnv -> Rules ()
 addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
   need [path]
   state <- liftIO $ readIORef (envState env)
-  if Map.member path (stateItemCache state)
+  let pathText = T.pack path
+  if Map.member pathText (stateItemCache state)
     then return ()
     else do
       let matchingCompilers = [ f | RuleMatch g f <- stateRules state, matchGlob g path ]
@@ -301,22 +301,18 @@ addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
           liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateCurrentDeps = [] }, ())
           
           -- Run 'f' in execution mode (envIsPlanning should be False)
-          res <- liftIO $ try (runReaderT (unSaraM (f path)) env) :: Action (Either SomeException (Item 'Validated))
+          res <- liftIO $ try (runReaderT (unSaraM (f pathText)) env) :: Action (Either SomeException (Item 'Validated))
           
           -- Read and register collected dependencies in Shake
           finalState <- liftIO $ readIORef (envState env)
           let deps = stateCurrentDeps finalState
-          needBlake3 deps
+          needBlake3 (map T.unpack deps)
           
           case res of
             Right item -> liftIO $ atomicModifyIORef' (envState env) $ \s ->
-              (s { stateItemCache = Map.insert path item (stateItemCache s) }, ())
+              (s { stateItemCache = Map.insert pathText item (stateItemCache s) }, ())
             Left err -> fail $ show err
         [] -> fail $ "No compiler found for " ++ path
-
--- Helper: f returns SaraM (Item 'Validated), so we need to capture the result.
--- Actually, we should probably change how 'f' is run.
--- For now, let's assume 'f' updates the cache or we update it here.
 
 matchGlob :: GlobPattern -> FilePath -> Bool
 matchGlob (GlobPattern p) path = match (compile (T.unpack p)) path

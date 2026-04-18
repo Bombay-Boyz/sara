@@ -88,7 +88,7 @@ tokenize = filter (not . T.null)
 mkSearchEntry :: Item v -> (SearchEntry, Text)
 mkSearchEntry item = 
   let entry = SearchEntry
-        { seUrl     = T.pack $ case itemRoute item of ResolvedRoute p -> p
+        { seUrl     = case itemRoute item of ResolvedRoute p -> p
         , seTitle   = case KM.lookup (K.fromText "title") (itemMeta item) of
                         Just (Aeson.String t) -> t
                         _ -> "Untitled"

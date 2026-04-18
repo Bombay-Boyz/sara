@@ -59,7 +59,7 @@ spec = do
 
             -- Step 2: Pass 2 (Execution - simulate build behavior)
             let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
-            resPass2 <- Control.Exception.try (runReaderT (unSaraM (readMarkdown (postsDir </> "test.md"))) finalEnv) :: IO (Either Control.Exception.SomeException (Item 'Unvalidated))
+            resPass2 <- Control.Exception.try (runReaderT (unSaraM (readMarkdown (T.pack $ postsDir </> "test.md"))) finalEnv) :: IO (Either Control.Exception.SomeException (Item 'Unvalidated))
             case resPass2 of
               Right item -> do
                 KM.lookup "toKey" (itemMeta item) `shouldBe` Just (Aeson.String "someValue")

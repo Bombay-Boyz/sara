@@ -1,10 +1,12 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
+
 module SARA.RoutingSpec (spec) where
 
 import Test.Hspec
-import SARA.Types
 import SARA.Routing.Engine
-import SARA.Error
+import SARA.Types (Route(..))
+import qualified Data.Text as T
 
 spec :: Spec
 spec = do

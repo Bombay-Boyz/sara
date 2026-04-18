@@ -16,23 +16,25 @@ import SARA.Frontmatter.Detect (FrontmatterFormat(..), detectFormat, splitFrontm
 import SARA.Security.HtmlEscape (escapeHtmlValue)
 import SARA.Error (SaraError(..), SaraErrorKind(..), SourcePos(..))
 
+import SARA.Monad (SPath)
+
 -- | UNIVERSAL PARSER: parse → Aeson Value → HTML-escape.
 parseFrontmatter
-  :: FilePath         -- ^ For error messages
+  :: SPath            -- ^ For error messages
   -> Text             -- ^ Full file content
   -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
-parseFrontmatter path content = do
+parseFrontmatter pathText content = do
   let fmt = detectFormat content
   case fmt of
     FmNone -> Right (KM.empty, content)
     _ -> do
       (rawFM, body) <- splitFrontmatter fmt content
       case fmt of
-        FmYAML -> parseYAML path rawFM body
-        FmTOML -> parseTOML path rawFM body
-        FmJSON -> parseJSON path rawFM body
+        FmYAML -> parseYAML pathText rawFM body
+        FmTOML -> parseTOML pathText rawFM body
+        FmJSON -> parseJSON pathText rawFM body
 
-parseYAML :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
+parseYAML :: SPath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseYAML path raw body = 
   case Yaml.decodeEither' (T.encodeUtf8 raw) of
     Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack $ show err)
@@ -40,7 +42,7 @@ parseYAML path raw body =
       Aeson.Object obj -> Right (applyHtmlEscape obj, body)
       _ -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) "Expected Object"
 
-parseTOML :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
+parseTOML :: SPath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseTOML path raw body = 
   case Toml.parse raw of
     Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack err)
@@ -48,7 +50,7 @@ parseTOML path raw body =
       let obj = tableToAeson (Toml.forgetTableAnns table)
       in Right (applyHtmlEscape obj, body)
 
-parseJSON :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
+parseJSON :: SPath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseJSON path raw body = 
   case Aeson.eitherDecodeStrict (T.encodeUtf8 raw) of
     Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack err)
