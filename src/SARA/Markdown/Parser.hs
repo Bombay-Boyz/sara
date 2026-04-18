@@ -10,9 +10,9 @@ import SARA.Markdown.Shortcode (Shortcode, expandShortcodes)
 
 -- | Parse Markdown to HTML using full GFM extensions.
 --   Now supports shortcode expansion before the Markdown pass.
-parseMarkdown :: (Shortcode -> Text) -> FilePath -> Text -> Text
-parseMarkdown handler _ body = 
-  let expandedBody = expandShortcodes handler body
-      opts = [CMark.optUnsafe, CMark.optSmart]
+parseMarkdown :: Monad m => (Shortcode -> m Text) -> FilePath -> Text -> m Text
+parseMarkdown handler _ body = do
+  expandedBody <- expandShortcodes handler body
+  let opts = [CMark.optUnsafe, CMark.optSmart]
       exts = [CMark.extTable, CMark.extTaskList, CMark.extAutolink, CMark.extStrikethrough]
-  in CMark.commonmarkToHtml opts exts expandedBody
+  return $ CMark.commonmarkToHtml opts exts expandedBody

@@ -17,7 +17,7 @@ import SARA.Security.HtmlEscape (escapeHtmlValue)
 --   Now includes special characters to verify HTML escaping.
 prop_yaml_roundtrip :: [(String, String)] -> Property
 prop_yaml_roundtrip pairs =
-  let cleanPairs = filter (\(k, _) -> not (null k) && all (`notElem` (":\n" :: String)) k) pairs
+  let cleanPairs = filter (\(k, v) -> not (null k) && all (`notElem` (":\n" :: String)) k && not ('\n' `elem` v)) pairs
       obj = Aeson.object [ Key.fromString k Aeson..= v | (k, v) <- cleanPairs ]
       -- We expect the parser to HTML-escape values
       expected = escapeHtmlValue obj

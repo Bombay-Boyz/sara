@@ -22,7 +22,7 @@ module SARA.DSL
   ) where
 
 import SARA.Types
-import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), tellRule, commitRules)
+import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), SaraState(..), tellRule, commitRules, addItemDependency)
 import SARA.Error (SaraError(..), AnySaraError(..), renderAnyErrorColor)
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
@@ -32,9 +32,8 @@ import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
 import Data.IORef (atomicModifyIORef')
-import Control.Monad (unless)
+import Control.Monad (unless, void)
 import Control.Monad.Reader (ask)
-import Control.Monad.Except (throwError)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
@@ -48,6 +47,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Yaml as Yaml
 import System.FilePath (takeExtension, replaceExtension)
 import qualified SARA.Routing.Engine as REngine
+import Control.Exception (throwIO)
 
 -- | Match source files by glob and run logic for each.
 match
@@ -72,14 +72,14 @@ route r item = do
   res <- liftIO $ REngine.resolveRoute r (itemPath item)
   case res of
     Right resolved -> return $ item { itemRoute = resolved }
-    Left err -> throwError [AnySaraError err]
+    Left err -> liftIO $ throwIO (AnySaraError err)
 
 -- | Read a Markdown file into an Item.
 readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
-readMarkdown file = readMarkdownWith (\_ -> "") file
+readMarkdown file = readMarkdownWith (\_ -> return "") file
 
 -- | Read Markdown with a custom shortcode handler.
-readMarkdownWith :: (Shortcode -> Text) -> FilePath -> SaraM (Item 'Unvalidated)
+readMarkdownWith :: (Shortcode -> SaraM Text) -> FilePath -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
   env <- ask
   content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
@@ -87,7 +87,7 @@ readMarkdownWith customHandler file = do
     Right (meta, body) -> do
       let rules = envRemapRules env
       case Remap.remapMetadata rules file meta of
-        Left err -> throwError [AnySaraError err]
+        Left err -> liftIO $ throwIO (AnySaraError err)
         Right remappedMeta -> do
           if envIsPlanning env
             then -- During planning, we skip body rendering but keep metadata
@@ -106,10 +106,10 @@ readMarkdownWith customHandler file = do
                           alt = Map.findWithDefault "" "alt" (scArgs sc)
                           safeSrc = T.replace "__" "" src
                           token = "__LQIP__:" <> safeSrc <> "__"
-                      in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
+                      in return $ "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
                     _ -> customHandler sc
 
-              let htmlBody = parseMarkdown handler file body
+              htmlBody <- parseMarkdown handler file body
               return $ Item
                 { itemPath = file
                 , itemRoute = ResolvedRoute (replaceExtension file "html")
@@ -117,7 +117,7 @@ readMarkdownWith customHandler file = do
                 , itemBody = htmlBody
                 , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
                 }
-    Left err -> throwError [AnySaraError err]
+    Left err -> liftIO $ throwIO (AnySaraError err)
 
 -- | Validate SEO properties.
 validateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
@@ -144,7 +144,7 @@ validateSEO item = do
           , itemBody = itemBody item
           , itemHash = itemHash item
           }
-        (Nothing, _) -> throwError [AnySaraError $ SEOTitleMissing (itemPath item)]
+        (Nothing, _) -> liftIO $ throwIO (AnySaraError $ SEOTitleMissing (itemPath item))
         (_, Nothing) -> do
           -- Return as a warning instead of a hard error
           liftIO $ TIO.putStrLn $ renderAnyErrorColor $ AnySaraError $ SEODescriptionMissing (itemPath item)
@@ -192,25 +192,23 @@ buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps) >> commitRules
 --   Automatically tracks dependencies in Shake.
 loadData :: FilePath -> SaraM Aeson.Value
 loadData path = do
-  env <- ask
   -- 1. Tell Shake to track this file as a dependency.
   tellRule (RuleDataDependency path)
   
-  -- 2. If we're not in planning, record this as a current dependency.
-  unless (envIsPlanning env) $ do
-    liftIO $ atomicModifyIORef' (envCurrentDeps env) (\deps -> (path : deps, ()))
+  -- 2. Record this as a dynamic dependency for the current context.
+  addItemDependency path
 
-  -- 3. Read the file NOW to allow the DSL to use the data.
+  -- 3. Read the file NOW (planning) to allow the DSL to use the data.
   content <- liftIO $ BS.readFile path
   let ext = takeExtension path
   case ext of
     ".json" -> case Aeson.decodeStrict content of
                  Just v -> return v
-                 Nothing -> throwError [AnySaraError $ AssetProcessingFailed path "Failed to parse JSON"]
+                 Nothing -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed path "Failed to parse JSON")
     ".yaml" -> case Yaml.decodeEither' content of
                  Right v -> return v
-                 Left err -> throwError [AnySaraError $ AssetProcessingFailed path (T.pack $ show err)]
-    _       -> throwError [AnySaraError $ AssetProcessingFailed path (T.pack $ "Unsupported data format: " ++ ext)]
+                 Left err -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed path (T.pack $ show err))
+    _       -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed path (T.pack $ "Unsupported data format: " ++ ext))
 
 -- | Generates a Base64 LQIP magic token for an image.
 imagePlaceholder :: FilePath -> SaraM Text
@@ -222,11 +220,8 @@ regexRoute pat repl = do
   res <- liftIO $ REngine.regexRoute pat repl
   case res of
     Right r -> return r
-    Left err -> throwError [AnySaraError err]
+    Left err -> liftIO $ throwIO (AnySaraError err)
 
 -- | Convenience helper for glob patterns.
 glob :: Text -> GlobPattern
 glob = GlobPattern
-
-void :: Functor f => f a -> f ()
-void = fmap (const ())

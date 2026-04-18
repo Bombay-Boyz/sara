@@ -20,6 +20,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Prettyprinter
 import Prettyprinter.Render.Terminal
+import Control.Exception (Exception)
 
 -- | Source location carried by every error that originates in user content.
 data SourcePos = SourcePos
@@ -78,6 +79,9 @@ data SaraError (k :: SaraErrorKind) where
   -- Template errors
   TemplateNotFound
     :: { tplName :: !FilePath }
+    -> SaraError 'EKTemplate
+  TemplateCompileError
+    :: { tplName :: !FilePath, tplDetail :: !Text }
     -> SaraError 'EKTemplate
   TemplateRenderFailure
     :: { tplName :: !FilePath, tplDetail :: !Text }
@@ -147,6 +151,8 @@ data SaraError (k :: SaraErrorKind) where
 data AnySaraError where
   AnySaraError :: SaraError k -> AnySaraError
 
+instance Exception AnySaraError
+
 deriving instance Show AnySaraError
 
 deriving instance Show (SaraError k)
@@ -196,6 +202,7 @@ errorDetails = \case
   RouteConflict f1 f2 out -> ("error", "E011", "Route conflict: both " <> T.pack f1 <> " and " <> T.pack f2 <> " map to " <> T.pack out, Nothing)
   MarkdownUnsupportedExtension f pos feat -> ("error", "E020", "Unsupported markdown extension '" <> feat <> "' in: " <> T.pack f, Just pos)
   TemplateNotFound t -> ("error", "E030", "Template not found: " <> T.pack t, Nothing)
+  TemplateCompileError t d -> ("error", "E034", "Template compilation failed for " <> T.pack t <> ": " <> d, Nothing)
   TemplateRenderFailure t d -> ("error", "E031", "Failed to render template " <> T.pack t <> ": " <> d, Nothing)
   TemplateKeyMissing t k -> ("error", "E032", "Missing key '" <> k <> "' in template: " <> T.pack t, Nothing)
   TemplateUnsafeInterpolation t ln -> ("error", "E033", "Unsafe raw interpolation detected in " <> T.pack t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))

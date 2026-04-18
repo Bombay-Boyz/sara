@@ -5,7 +5,7 @@ module SARA.EnhancedFeaturesSpec (spec) where
 
 import Test.Hspec
 import SARA
-import SARA.Monad (SaraEnv(..), RuleDecl(..), SaraM(..))
+import SARA.Monad (SaraEnv(..), SaraState(..), RuleDecl(..), SaraM(..), initialState)
 import SARA.Config (defaultConfig, cfgOutputDirectory)
 import SARA.Security.PathGuard (mkProjectRoot)
 import qualified Data.Aeson as Aeson
@@ -16,11 +16,11 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.IORef
 import Control.Monad.Reader (runReaderT)
-import Control.Monad.Except (runExceptT)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
+import qualified Control.Exception
 
 spec :: Spec
 spec = do
@@ -31,17 +31,10 @@ spec = do
         createDirectoryIfMissing True postsDir
         -- remapMetadata RENAMES a key, so the key must exist
         TIO.writeFile (postsDir </> "test.md") "---\nfromKey: someValue\n---\nBody"
-        
-        graphRef <- newIORef HS.empty
-        errorRef <- newIORef False
-        rulesRef <- newIORef []
-        itemCacheRef <- newIORef Map.empty
-        dataCacheRef <- newIORef Map.empty
-        currentDepsRef <- newIORef []
-        localRulesRef <- newIORef []
 
         let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
         root <- mkProjectRoot tmpDir
+        stateRef <- newIORef initialState
 
         let dsl = do
               remapMetadata [("fromKey", "toKey")]
@@ -50,18 +43,25 @@ spec = do
                 validateSEO item
 
         -- Step 1: Pass 1 (Planning)
-        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef currentDepsRef localRulesRef
+        let initialEnv = SaraEnv
+              { envConfig     = config
+              , envRoot       = root
+              , envIsPlanning = True
+              , envRemapRules = []
+              , envState      = stateRef
+              }
 
-        resPass1 <- runExceptT $ runReaderT (unSaraM dsl) initialEnv
+        resPass1 <- Control.Exception.try (runReaderT (unSaraM dsl) initialEnv) :: IO (Either Control.Exception.SomeException ())
         case resPass1 of
           Right () -> do
-            rules <- readIORef rulesRef
+            state <- readIORef stateRef
+            let rules = reverse (stateRules state)
             let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
             allRemapRules `shouldContain` [("fromKey", "toKey")]
-            
+
             -- Step 2: Pass 2 (Execution - simulate build behavior)
             let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
-            resPass2 <- runExceptT $ runReaderT (unSaraM (readMarkdown (postsDir </> "test.md"))) finalEnv
+            resPass2 <- Control.Exception.try (runReaderT (unSaraM (readMarkdown (postsDir </> "test.md"))) finalEnv) :: IO (Either Control.Exception.SomeException (Item 'Unvalidated))
             case resPass2 of
               Right item -> do
                 KM.lookup "toKey" (itemMeta item) `shouldBe` Just (Aeson.String "someValue")
@@ -73,14 +73,14 @@ spec = do
       let opts = ScaffoldOptions "Test Site" "Author" "/"
       withSystemTempDirectory "sara-scaffold-wow" $ \tmpDir -> do
         scaffoldProject tmpDir opts
-        
+
         -- Check for search.js
         exists <- doesFileExist (tmpDir </> "assets" </> "search.js")
         exists `shouldBe` True
-        
+
         -- Check for View Transitions in template
         tplContent <- TIO.readFile (tmpDir </> "templates" </> "post.html")
         T.isInfixOf "view-transition" tplContent `shouldBe` True
-        
+
         -- Check for Dark Mode CSS
         T.isInfixOf "prefers-color-scheme: dark" tplContent `shouldBe` True

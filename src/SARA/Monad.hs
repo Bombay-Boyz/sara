@@ -1,36 +1,79 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module SARA.Monad
   ( SaraM(..)
   , SaraEnv(..)
+  , SaraState(..)
   , RuleDecl(..)
   , SiteGraph
   , tellRule
   , commitRules
+  , addItemDependency
+  , initialState
   ) where
 
-import Control.Monad (unless)
-import Control.Monad.Reader (ReaderT, MonadReader, asks, ask)
-import Control.Monad.Except (ExceptT, MonadError)
+import Control.Monad.Reader (ReaderT, MonadReader, ask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import Data.IORef (IORef, atomicModifyIORef')
 import Data.HashSet (HashSet)
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError)
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig)
+import SARA.Template.Error (TemplateError)
+import qualified Text.Mustache as Mustache
+import Control.Concurrent (MVar)
+import GHC.Generics (Generic)
+import Control.Monad (unless)
 
 -- | The site graph tracks all resolved output paths.
 type SiteGraph = HashSet FilePath
 
+-- | Pure state of the SARA application.
+--   Consolidating the "IORef Soup" into a single state record.
+data SaraState = SaraState
+  { stateSiteGraph     :: !SiteGraph
+  , stateHasErrors     :: !Bool
+  , stateRules         :: ![RuleDecl]
+  , stateLocalRules    :: ![RuleDecl]
+  , stateItemCache     :: !(Map.Map FilePath (Item 'Validated))
+  , stateDataCache     :: !(Map.Map FilePath Aeson.Value)
+  , stateTemplateCache :: !(Map.Map FilePath (MVar (Maybe (Either TemplateError Mustache.Template))))
+  , stateCurrentDeps   :: ![FilePath]
+  } deriving (Generic)
+
+initialState :: SaraState
+initialState = SaraState
+  { stateSiteGraph = HS.empty
+  , stateHasErrors = False
+  , stateRules = []
+  , stateLocalRules = []
+  , stateItemCache = Map.empty
+  , stateDataCache = Map.empty
+  , stateTemplateCache = Map.empty
+  , stateCurrentDeps = []
+  }
+
+-- | Read-only environment for SARA.
+data SaraEnv = SaraEnv
+  { envConfig     :: !SaraConfig
+  , envRoot       :: !ProjectRoot
+  , envIsPlanning :: !Bool
+  , envRemapRules :: ![(Text, Text)]
+  , envState      :: !(IORef SaraState)
+  }
+
 -- | The SARA monad stack for rule declaration.
+--   Refactored to remove ExceptT in favor of IO exceptions (industrial standard).
 newtype SaraM a = SaraM
-  { unSaraM :: ReaderT SaraEnv (ExceptT [AnySaraError] IO) a
-  } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv, MonadError [AnySaraError])
+  { unSaraM :: ReaderT SaraEnv IO a
+  } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv)
 
 -- | Register a rule in the SARA environment.
 --   Only effective during the planning phase.
@@ -38,7 +81,8 @@ tellRule :: RuleDecl -> SaraM ()
 tellRule d = do
   env <- ask
   if envIsPlanning env
-    then liftIO $ atomicModifyIORef' (envLocalRules env) (\rules -> (d : rules, ()))
+    then liftIO $ atomicModifyIORef' (envState env) $ \s ->
+      (s { stateLocalRules = d : stateLocalRules s }, ())
     else return ()
 
 -- | Commit locally collected rules to the global rule set.
@@ -46,24 +90,18 @@ commitRules :: SaraM ()
 commitRules = do
   env <- ask
   liftIO $ do
-    locals <- atomicModifyIORef' (envLocalRules env) (\ls -> ([], ls))
+    locals <- atomicModifyIORef' (envState env) $ \s ->
+      (s { stateLocalRules = [] }, stateLocalRules s)
     unless (null locals) $
-      atomicModifyIORef' (envRules env) (\globals -> (locals ++ globals, ()))
+      atomicModifyIORef' (envState env) $ \s ->
+        (s { stateRules = locals ++ stateRules s }, ())
 
-data SaraEnv = SaraEnv
-  { envConfig     :: !SaraConfig
-  , envRoot       :: !ProjectRoot
-  , envSiteGraph  :: !(IORef SiteGraph)
-  , envRemapRules :: ![(Text, Text)]
-  , envHasErrors  :: !(IORef Bool)
-  , envRules      :: !(IORef [RuleDecl])
-  , envIsPlanning :: !Bool
-  , envItemCache  :: !(IORef (Map.Map FilePath (Item 'Validated)))
-  , envDataCache  :: !(IORef (Map.Map FilePath Aeson.Value))
-  , envCurrentDeps :: !(IORef [FilePath])
-  , envLocalRules :: !(IORef [RuleDecl])
-  }
-
+-- | Record a dynamic dependency for the current item.
+addItemDependency :: FilePath -> SaraM ()
+addItemDependency p = do
+  env <- ask
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateCurrentDeps = p : stateCurrentDeps s }, ())
 
 -- | Declarations produced by the DSL.
 data RuleDecl

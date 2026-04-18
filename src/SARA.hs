@@ -16,16 +16,14 @@ import SARA.DSL
 import SARA.Types
 import SARA.Config
 import SARA.Error
-import SARA.Monad (SaraM(..), SaraEnv(..), RuleDecl(..))
+import SARA.Monad (SaraM(..), SaraEnv(..), SaraState(..), RuleDecl(..), initialState)
 import SARA.Security.ShellGuard (validateArg)
 import SARA.Internal.Engine (runBuild)
 import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
 import SARA.LiveReload.Server (broadcastMessage, ClientList)
 import SARA.Template.Lucid (renderLucid)
 import Control.Monad.Reader (runReaderT)
-import Control.Monad.Except (runExceptT)
 import Data.IORef (newIORef, readIORef)
-import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -35,6 +33,7 @@ import System.Exit (exitFailure)
 import Control.Concurrent (MVar)
 import qualified Data.Aeson as Aeson
 import System.CPUTime (getCPUTime)
+import Control.Exception (try, SomeException)
 
 -- | Entry point for a SARA site.
 sara :: SaraM () -> IO ()
@@ -47,53 +46,43 @@ saraWithClients mClients m = do
   cwd <- getCurrentDirectory
   root <- mkProjectRoot cwd
   
-  -- Step 0: Load config (Fixes Issue #19)
+  -- Step 0: Load config
   config <- loadConfig (cwd </> "sara.yaml")
   
-  graphRef <- newIORef HS.empty
-  errorRef <- newIORef False
-  rulesRef <- newIORef []
-  itemCacheRef <- newIORef Map.empty
-  dataCacheRef <- newIORef Map.empty
-  currentDepsRef <- newIORef []
-  localRulesRef <- newIORef []
+  stateRef <- newIORef initialState
   
   -- Step 1: Execute DSL to collect RuleDecls
   let initialEnv = SaraEnv
-        { envConfig = config
-        , envRoot = root
-        , envSiteGraph = graphRef
-        , envRemapRules = []
-        , envHasErrors = errorRef
-        , envRules = rulesRef
+        { envConfig     = config
+        , envRoot       = root
         , envIsPlanning = True
-        , envItemCache = itemCacheRef
-        , envDataCache = dataCacheRef
-        , envCurrentDeps = currentDepsRef
-        , envLocalRules = localRulesRef
+        , envRemapRules = []
+        , envState      = stateRef
         }
   
-  result <- runExceptT $ runReaderT (unSaraM m) initialEnv
+  -- Refactored to catch exceptions in IO
+  result <- try (runReaderT (unSaraM m) initialEnv) :: IO (Either SomeException ())
   
   case result of
-    Left errs -> do
-      mapM_ (TIO.putStrLn . renderAnyErrorColor) errs
+    Left err -> do
+      TIO.putStrLn $ "SARA ERROR: " <> T.pack (show err)
       exitFailure
     Right () -> do
-      rules <- reverse <$> readIORef rulesRef
+      state <- readIORef stateRef
+      let rules = reverse (stateRules state)
       
       let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
       let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
       
+      -- Industrial refinement: runBuild should also handle its own exceptions or pass them up
       runBuild finalEnv rules
 
-      hasErrors <- readIORef (envHasErrors finalEnv)
-      siteGraph <- readIORef (envSiteGraph finalEnv)
+      finalState <- readIORef stateRef
+      let hasErrors = stateHasErrors finalState
+      let siteGraph = stateSiteGraph finalState
       
       end <- getCPUTime
       let itemCount = HS.size siteGraph
-      -- A simplified industrial performance score: 
-      -- Based on items per second to give some relation to speed.
       let picosPerSec = 10^(12 :: Integer)
       let diffSecs = fromIntegral (end - start) / fromIntegral picosPerSec
       let perfScore = if itemCount > 0 && diffSecs > 0
@@ -109,7 +98,6 @@ saraWithClients mClients m = do
       
       renderQualitySeal qs
       
-      -- Broadcast Quality Seal to any connected dashboards
       case mClients of
         Just clients -> broadcastMessage clients $ Aeson.object ["type" Aeson..= ("quality-seal" :: T.Text), "data" Aeson..= qs]
         Nothing -> return ()

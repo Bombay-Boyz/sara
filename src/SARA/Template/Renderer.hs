@@ -23,6 +23,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import SARA.Template.Error
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
+import SARA.Monad (SaraEnv(..), SaraState(..))
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
@@ -34,12 +35,6 @@ newtype TemplateOracle = TemplateOracle FilePath
 
 type instance RuleResult TemplateOracle = FilePath
 
--- | Global cache for compiled templates.
---   Uses a top-level IORef of MVars for double-checked locking per template.
-{-# NOINLINE templateCache #-}
-templateCache :: IORef (Map.Map FilePath (MVar (Maybe (Either TemplateError Mustache.Template))))
-templateCache = unsafePerformIO $ newIORef Map.empty
-
 addTemplateOracle :: Rules ()
 addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
   need [path]
@@ -50,19 +45,20 @@ addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
     errs -> fail $ "Security audit failed for template " ++ path ++ ": " ++ show errs
 
 renderTemplate
-  :: FilePath
+  :: SaraEnv
+  -> FilePath
   -> Aeson.Value
   -> Action (Either TemplateError Text)
-renderTemplate tplPath ctx = do
+renderTemplate env tplPath ctx = do
   _ <- askOracle (TemplateOracle tplPath)
   
   -- 1. Get or create the MVar for this specific template path
-  mvar <- liftIO $ atomicModifyIORef' templateCache $ \c ->
-    case Map.lookup tplPath c of
-      Just m  -> (c, m)
+  mvar <- liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    case Map.lookup tplPath (stateTemplateCache s) of
+      Just m  -> (s, m)
       Nothing -> 
         let m = unsafePerformIO (newMVar Nothing)
-        in (Map.insert tplPath m c, m)
+        in (s { stateTemplateCache = Map.insert tplPath m (stateTemplateCache s) }, m)
   
   -- 2. Use the MVar to ensure only one thread compiles this template
   tplRes <- liftIO $ modifyMVar mvar $ \case

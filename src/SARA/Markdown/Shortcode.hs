@@ -48,11 +48,11 @@ parseShortcodes t = case parse (many (try pShortcode <|> (anySingle >> return (S
   Right scs -> filter (\s -> scName s /= "ignore") scs
 
 -- | Expands shortcodes using a registry of handlers.
-expandShortcodes :: (Shortcode -> Text) -> Text -> Text
+expandShortcodes :: Monad m => (Shortcode -> m Text) -> Text -> m Text
 expandShortcodes handler t =
   case parse (pBody handler) "" t of
-    Left _ -> t
-    Right res -> res
+    Left _ -> return t
+    Right res -> T.concat <$> sequence res
 
-pBody :: (Shortcode -> Text) -> Parser Text
-pBody handler = T.concat <$> many (try (handler <$> pShortcode) <|> (T.singleton <$> anySingle))
+pBody :: Monad m => (Shortcode -> m Text) -> Parser [m Text]
+pBody handler = many (try (handler <$> pShortcode) <|> (return . T.singleton <$> anySingle))

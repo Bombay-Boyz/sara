@@ -6,6 +6,7 @@ import Test.Hspec
 import SARA.Markdown.Shortcode
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
+import Data.Functor.Identity (runIdentity)
 
 spec :: Spec
 spec = do
@@ -22,13 +23,13 @@ spec = do
 
     it "expands shortcodes into HTML picture tags" $ do
       let input = "Check this: {{% image src=\"sunset.jpg\" alt=\"Sunset\" %}}"
-      let handler sc = if scName sc == "image"
+      let handler sc = return $ if scName sc == "image"
             then "<picture><img src=\"" <> (Map.findWithDefault "" "src" (scArgs sc)) <> "\"></picture>"
             else ""
-      let expanded = expandShortcodes handler input
+      let expanded = runIdentity $ expandShortcodes handler input
       expanded `shouldBe` "Check this: <picture><img src=\"sunset.jpg\"></picture>"
 
     it "handles multiple shortcodes in one block" $ do
       let input = "{{% a %}} and {{% b %}}"
-      let handler sc = "[" <> scName sc <> "]"
-      expandShortcodes handler input `shouldBe` "[a] and [b]"
+      let handler sc = return $ "[" <> scName sc <> "]"
+      runIdentity (expandShortcodes handler input) `shouldBe` "[a] and [b]"

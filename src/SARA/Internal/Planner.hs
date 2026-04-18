@@ -8,12 +8,13 @@
 
 module SARA.Internal.Planner
   ( planRules
+  , askItem
   ) where
 
 import Development.Shake
 import Development.Shake.Classes
 import Development.Shake.FilePath
-import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..))
+import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..), SaraState(..), addItemDependency)
 import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..))
 import SARA.Config (SaraConfig(..))
 import SARA.Security.PathGuard (guardPath, unSafePath)
@@ -33,19 +34,19 @@ import SARA.SEO.Feed (generateRSS)
 import GHC.Generics (Generic)
 import Control.Monad (forM_, void)
 import Control.Monad.Reader (runReaderT)
-import Control.Monad.Except (runExceptT)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
-import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', readIORef)
 import System.IO (hFlush, stdout)
 import System.FilePath.Glob (globDir1, compile, match)
 import System.Directory (createDirectoryIfMissing)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
+import Control.Exception (try, SomeException)
 
 collectOutputs :: SaraEnv -> [RuleDecl] -> [FilePath]
 collectOutputs env decls =
@@ -91,7 +92,7 @@ translateDecl env = \case
   RuleGlobal _         -> return ()
 
 genMatch :: SaraEnv -> GlobPattern -> (FilePath -> SaraM (Item 'Validated)) -> Rules ()
-genMatch _ _ _ = return () -- No-op: match logic already executed in DSL phase to collect rules.
+genMatch _ _ _ = return ()
 
 genDiscover :: SaraEnv -> GlobPattern -> Rules ()
 genDiscover env g = do
@@ -103,7 +104,8 @@ genDiscover env g = do
       Left err -> liftIO $ TIO.putStrLn (renderAnyErrorColor (AnySaraError err))
       Right safeSrc -> do
         let out = outDir </> src
-        liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert src sg, ())
+        liftIO $ atomicModifyIORef' (envState env) $ \s ->
+          (s { stateSiteGraph = HS.insert src (stateSiteGraph s) }, ())
         case inferAssetKind src of
           SomeAssetKind (ImageAsset spec) -> do
             out %> \o -> do
@@ -124,7 +126,8 @@ genRender :: SaraEnv -> FilePath -> Item 'Validated -> FilePath -> Rules ()
 genRender env tplPath item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
   let fullOutPath = outDir </> outPath
-  liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
 
   fullOutPath %> \o -> do
     liftIO $ do
@@ -149,24 +152,24 @@ genRender env tplPath item outPath = do
             let itemWithBody = KM.insert (K.fromText "itemBody") (Aeson.String (itemBody realItem)) (itemMeta realItem)
             let ctx = Aeson.Object $ KM.union itemWithBody siteMeta
             
-            renderTemplate (unSafePath safeTpl) ctx >>= \case
+            renderTemplate env (unSafePath safeTpl) ctx >>= \case
               Left err -> fail $ show err
               Right html -> do
                 -- Inject real LQIPs by scanning for magic tokens
                 finalHtml <- injectLQIPs html
                 
-                sg <- liftIO $ readIORef (envSiteGraph env)
-                let linkIssues = checkInternalLinks sg (itemPath realItem) outPath finalHtml
+                state <- liftIO $ readIORef (envState env)
+                let linkIssues = checkInternalLinks (stateSiteGraph state) (itemPath realItem) outPath finalHtml
                 let seoResult = auditRenderedHTML outPath finalHtml
                 case seoResult of
                   AuditIssues _ issues -> do
-                    liftIO $ writeIORef (envHasErrors env) True
+                    liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
                     liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ linkIssues)
                   AuditPassed -> do
                     case linkIssues of
                       [] -> return ()
                       _  -> do
-                        liftIO $ writeIORef (envHasErrors env) True
+                        liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
                         liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) linkIssues
                 writeFile' o (T.unpack finalHtml)
 
@@ -174,7 +177,8 @@ genRenderRaw :: SaraEnv -> Text -> Item 'Validated -> FilePath -> Rules ()
 genRenderRaw env html item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
   let fullOutPath = outDir </> outPath
-  liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
 
   fullOutPath %> \o -> do
     -- Load the real item content even if we use raw HTML (for metadata context)
@@ -182,18 +186,18 @@ genRenderRaw env html item outPath = do
     -- Inject real LQIPs even for raw HTML
     finalHtml <- injectLQIPs html
     
-    sg <- liftIO $ readIORef (envSiteGraph env)
-    let linkIssues = checkInternalLinks sg (itemPath realItem) outPath finalHtml
+    state <- liftIO $ readIORef (envState env)
+    let linkIssues = checkInternalLinks (stateSiteGraph state) (itemPath realItem) outPath finalHtml
     let seoResult = auditRenderedHTML outPath finalHtml
     case seoResult of
       AuditIssues _ issues -> do
-        liftIO $ writeIORef (envHasErrors env) True
+        liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
         liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ linkIssues)
       AuditPassed -> do
         case linkIssues of
           [] -> return ()
           _  -> do
-            liftIO $ writeIORef (envHasErrors env) True
+            liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
             liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) linkIssues
     writeFile' o (T.unpack finalHtml)
 
@@ -217,7 +221,8 @@ genSearch :: SaraEnv -> FilePath -> [Item 'Validated] -> Rules ()
 genSearch env outPath items = do
   let outDir = cfgOutputDirectory (envConfig env)
   let fullOutPath = outDir </> outPath
-  liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   -- Register partial search rules for each item
   forM_ items $ \i -> do
@@ -243,7 +248,8 @@ genSitemap :: SaraEnv -> FilePath -> [Item 'Validated] -> Rules ()
 genSitemap env outPath items = do
   let outDir = cfgOutputDirectory (envConfig env)
   let fullOutPath = outDir </> outPath
-  liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   fullOutPath %> \o -> do
     -- During execution, load real items
@@ -254,12 +260,14 @@ genRSS :: SaraEnv -> FilePath -> FeedConfig -> [Item 'Validated] -> Rules ()
 genRSS env outPath cfg items = do
   let outDir = cfgOutputDirectory (envConfig env)
   let fullOutPath = outDir </> outPath
-  liftIO $ atomicModifyIORef' (envSiteGraph env) $ \sg -> (HS.insert outPath sg, ())
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
   
   fullOutPath %> \o -> do
     -- During execution, load real items
     realItems <- mapM (askItem env . itemPath) items
     generateRSS cfg realItems o
+
 
 genDataDependency :: SaraEnv -> FilePath -> Rules ()
 genDataDependency _ path = action $ need [path]
@@ -269,8 +277,8 @@ askItem :: SaraEnv -> FilePath -> Action (Item 'Validated)
 askItem env path = do
   need [path]
   askOracle (ItemOracle path)
-  cache <- liftIO $ readIORef (envItemCache env)
-  case Map.lookup path cache of
+  state <- liftIO $ readIORef (envState env)
+  case Map.lookup path (stateItemCache state) of
     Just item -> return item
     Nothing -> fail $ "ItemOracle succeeded but cache is empty for " ++ path
 
@@ -282,28 +290,33 @@ type instance RuleResult ItemOracle = ()
 addItemOracle :: SaraEnv -> Rules ()
 addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
   need [path]
-  cache <- liftIO $ readIORef (envItemCache env)
-  if Map.member path cache
+  state <- liftIO $ readIORef (envState env)
+  if Map.member path (stateItemCache state)
     then return ()
     else do
-      decls <- liftIO $ readIORef (envRules env)
-      let matchingCompilers = [ f | RuleMatch g f <- decls, matchGlob g path ]
+      let matchingCompilers = [ f | RuleMatch g f <- stateRules state, matchGlob g path ]
       case matchingCompilers of
         (f:_) -> do
           -- Clear current deps before running f
-          liftIO $ writeIORef (envCurrentDeps env) []
+          liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateCurrentDeps = [] }, ())
           
           -- Run 'f' in execution mode (envIsPlanning should be False)
-          res <- liftIO $ runExceptT $ runReaderT (unSaraM (f path)) env
+          res <- liftIO $ try (runReaderT (unSaraM (f path)) env) :: Action (Either SomeException (Item 'Validated))
           
           -- Read and register collected dependencies in Shake
-          deps <- liftIO $ readIORef (envCurrentDeps env)
+          finalState <- liftIO $ readIORef (envState env)
+          let deps = stateCurrentDeps finalState
           needBlake3 deps
           
           case res of
-            Right item -> liftIO $ atomicModifyIORef' (envItemCache env) (\c -> (Map.insert path item c, ()))
-            Left errs -> fail $ T.unpack $ T.unlines $ map renderAnyErrorColor errs
+            Right item -> liftIO $ atomicModifyIORef' (envState env) $ \s ->
+              (s { stateItemCache = Map.insert path item (stateItemCache s) }, ())
+            Left err -> fail $ show err
         [] -> fail $ "No compiler found for " ++ path
+
+-- Helper: f returns SaraM (Item 'Validated), so we need to capture the result.
+-- Actually, we should probably change how 'f' is run.
+-- For now, let's assume 'f' updates the cache or we update it here.
 
 matchGlob :: GlobPattern -> FilePath -> Bool
 matchGlob (GlobPattern p) path = match (compile (T.unpack p)) path
