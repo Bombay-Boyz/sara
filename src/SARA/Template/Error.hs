@@ -12,6 +12,9 @@ data TemplateError where
   TemplateNotFound
     :: { tplName :: !FilePath }
     -> TemplateError
+  TemplateCompileError
+    :: { tplName :: !FilePath, tplDetail :: !Text }
+    -> TemplateError
   TemplateRenderFailure
     :: { tplName :: !FilePath, tplDetail :: !Text }
     -> TemplateError

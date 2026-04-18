@@ -290,8 +290,16 @@ addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
       let matchingCompilers = [ f | RuleMatch g f <- decls, matchGlob g path ]
       case matchingCompilers of
         (f:_) -> do
+          -- Clear current deps before running f
+          liftIO $ writeIORef (envCurrentDeps env) []
+          
           -- Run 'f' in execution mode (envIsPlanning should be False)
           res <- liftIO $ runExceptT $ runReaderT (unSaraM (f path)) env
+          
+          -- Read and register collected dependencies in Shake
+          deps <- liftIO $ readIORef (envCurrentDeps env)
+          needBlake3 deps
+          
           case res of
             Right item -> liftIO $ atomicModifyIORef' (envItemCache env) (\c -> (Map.insert path item c, ()))
             Left errs -> fail $ T.unpack $ T.unlines $ map renderAnyErrorColor errs

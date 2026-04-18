@@ -34,7 +34,7 @@ newtype SaraM a = SaraM
 tellRule :: RuleDecl -> SaraM ()
 tellRule d = do
   ref <- asks envRules
-  liftIO $ atomicModifyIORef' ref (\rules -> (rules ++ [d], ()))
+  liftIO $ atomicModifyIORef' ref (\rules -> (d : rules, ()))
 
 data SaraEnv = SaraEnv
   { envConfig     :: !SaraConfig
@@ -46,6 +46,7 @@ data SaraEnv = SaraEnv
   , envIsPlanning :: !Bool
   , envItemCache  :: !(IORef (Map.Map FilePath (Item 'Validated)))
   , envDataCache  :: !(IORef (Map.Map FilePath Aeson.Value))
+  , envCurrentDeps :: !(IORef [FilePath])
   }
 
 

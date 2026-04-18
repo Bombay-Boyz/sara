@@ -31,6 +31,8 @@ import SARA.Asset.Discover (discoverAssets)
 import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
+import Data.IORef (atomicModifyIORef')
+import Control.Monad (unless)
 import Control.Monad.Reader (ask)
 import Control.Monad.Except (throwError)
 import qualified Data.Aeson as Aeson
@@ -76,36 +78,31 @@ readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
 readMarkdown file = readMarkdownWith (\_ -> "") file
 
 -- | Read Markdown with a custom shortcode handler.
-readMarkdownWith 
-  :: (Shortcode -> Text) 
-  -> FilePath 
-  -> SaraM (Item 'Unvalidated)
+readMarkdownWith :: (Shortcode -> Text) -> FilePath -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
   env <- ask
-  if envIsPlanning env
-    then -- During planning, we don't read the file body.
-         return $ Item
-           { itemPath = file
-           , itemRoute = ResolvedRoute (replaceExtension file "html")
-           , itemMeta = KM.empty
-           , itemBody = ""
-           , itemHash = BLAKE3.hash Nothing ([] :: [BS.ByteString])
-           }
-    else do
-      content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
-      case parseFrontmatter file content of
-        Right (meta, body) -> do
-          let rules = envRemapRules env
-          case Remap.remapMetadata rules file meta of
-            Left err -> throwError [AnySaraError err]
-            Right remappedMeta -> do
+  content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
+  case parseFrontmatter file content of
+    Right (meta, body) -> do
+      let rules = envRemapRules env
+      case Remap.remapMetadata rules file meta of
+        Left err -> throwError [AnySaraError err]
+        Right remappedMeta -> do
+          if envIsPlanning env
+            then -- During planning, we skip body rendering but keep metadata
+                 return $ Item
+                   { itemPath = file
+                   , itemRoute = ResolvedRoute (replaceExtension file "html")
+                   , itemMeta = remappedMeta
+                   , itemBody = ""
+                   , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
+                   }
+            else do
               -- 2. Expand shortcodes with industrial image support
               let handler sc = case scName sc of
                     "image" -> 
                       let src = Map.findWithDefault "" "src" (scArgs sc)
                           alt = Map.findWithDefault "" "alt" (scArgs sc)
-                          -- We use a more robust token format that is less likely to be broken by path characters
-                          -- and we'll ensure src doesn't contain the delimiter.
                           safeSrc = T.replace "__" "" src
                           token = "__LQIP__:" <> safeSrc <> "__"
                       in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
@@ -119,7 +116,7 @@ readMarkdownWith customHandler file = do
                 , itemBody = htmlBody
                 , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
                 }
-        Left err -> throwError [AnySaraError err]
+    Left err -> throwError [AnySaraError err]
 
 -- | Validate SEO properties.
 validateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
@@ -192,10 +189,15 @@ buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps)
 --   Automatically tracks dependencies in Shake.
 loadData :: FilePath -> SaraM Aeson.Value
 loadData path = do
+  env <- ask
   -- 1. Tell Shake to track this file as a dependency.
   tellRule (RuleDataDependency path)
   
-  -- 2. Read the file NOW (planning) to allow the DSL to use the data.
+  -- 2. If we're not in planning, record this as a current dependency.
+  unless (envIsPlanning env) $ do
+    liftIO $ atomicModifyIORef' (envCurrentDeps env) (\deps -> (path : deps, ()))
+
+  -- 3. Read the file NOW to allow the DSL to use the data.
   content <- liftIO $ BS.readFile path
   let ext = takeExtension path
   case ext of

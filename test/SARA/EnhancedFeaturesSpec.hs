@@ -37,10 +37,11 @@ spec = do
         rulesRef <- newIORef []
         itemCacheRef <- newIORef Map.empty
         dataCacheRef <- newIORef Map.empty
-        
+        currentDepsRef <- newIORef []
+
         let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
         root <- mkProjectRoot tmpDir
-        
+
         let dsl = do
               remapMetadata [("fromKey", "toKey")]
               void $ match (glob "posts/*.md") $ \file -> do
@@ -48,7 +49,8 @@ spec = do
                 validateSEO item
 
         -- Step 1: Pass 1 (Planning)
-        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef
+        let initialEnv = SaraEnv config root graphRef [] errorRef rulesRef True itemCacheRef dataCacheRef currentDepsRef
+
         resPass1 <- runExceptT $ runReaderT (unSaraM dsl) initialEnv
         case resPass1 of
           Right () -> do

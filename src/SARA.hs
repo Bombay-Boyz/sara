@@ -55,6 +55,7 @@ saraWithClients mClients m = do
   rulesRef <- newIORef []
   itemCacheRef <- newIORef Map.empty
   dataCacheRef <- newIORef Map.empty
+  currentDepsRef <- newIORef []
   
   -- Step 1: Execute DSL to collect RuleDecls
   let initialEnv = SaraEnv
@@ -67,6 +68,7 @@ saraWithClients mClients m = do
         , envIsPlanning = True
         , envItemCache = itemCacheRef
         , envDataCache = dataCacheRef
+        , envCurrentDeps = currentDepsRef
         }
   
   result <- runExceptT $ runReaderT (unSaraM m) initialEnv
@@ -76,7 +78,7 @@ saraWithClients mClients m = do
       mapM_ (TIO.putStrLn . renderAnyErrorColor) errs
       exitFailure
     Right () -> do
-      rules <- readIORef rulesRef
+      rules <- reverse <$> readIORef rulesRef
       
       let allRemapRules = concat [ rs | RuleRemap rs <- rules ]
       let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
