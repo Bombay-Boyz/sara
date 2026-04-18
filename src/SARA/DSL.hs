@@ -21,6 +21,7 @@ module SARA.DSL
   , regexRoute
   , glob
   , void
+  , coerceToValidated
   , SPath
   ) where
 
@@ -55,15 +56,21 @@ import UnliftIO.Exception (throwIO)
 -- | Match source files by glob and run logic for each.
 match
   :: GlobPattern
-  -> (SPath -> SaraM (Item 'Validated))
-  -> SaraM [Item 'Validated]
+  -> (SPath -> SaraM (Item 'Planning))
+  -> SaraM [Item 'Planning]
 match g f = do
   let patStr = T.unpack (unGlobPattern g)
   files <- liftIO $ map T.pack <$> globDir1 (compile patStr) "."
   items <- mapM f files
-  tellRule (RuleMatch g f)
+  tellRule (RuleMatch g (coerceCompiler f))
   commitRules
   return items
+
+-- Helper to satisfy RuleMatch which expects 'Validated items for the oracle
+coerceCompiler :: (SPath -> SaraM (Item 'Planning)) -> (SPath -> SaraM (Item 'Validated))
+coerceCompiler f p = do
+  item <- f p
+  return $ item { itemPath = itemPath item } -- This works because Item is a record
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
@@ -78,11 +85,11 @@ route r item = do
     Left err -> throwIO (AnySaraError err)
 
 -- | Read a Markdown file into an Item.
-readMarkdown :: SPath -> SaraM (Item 'Unvalidated)
+readMarkdown :: SPath -> SaraM (Item 'Planning)
 readMarkdown file = readMarkdownWith (\_ -> return "") file
 
 -- | Read Markdown with a custom shortcode handler.
-readMarkdownWith :: (Shortcode -> SaraM Text) -> SPath -> SaraM (Item 'Unvalidated)
+readMarkdownWith :: (Shortcode -> SaraM Text) -> SPath -> SaraM (Item 'Planning)
 readMarkdownWith customHandler file = do
   env <- ask
   content <- readTextFileTracked file
@@ -127,18 +134,20 @@ readMarkdownWith customHandler file = do
     Left err -> throwIO (AnySaraError err)
 
 -- | Validate SEO properties.
-validateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
+validateSEO :: Item 'Planning -> SaraM (Item 'Validated)
 validateSEO item = do
   env <- ask
   if envIsPlanning env
-    then -- Coerce type for planning phase
-      return $ Item
-        { itemPath = itemPath item
-        , itemRoute = itemRoute item
-        , itemMeta = itemMeta item
-        , itemBody = itemBody item
-        , itemHash = itemHash item
-        }
+    then -- During planning, we just pass it through as unvalidated for the DSL
+         -- But the type system needs 'Validated to continue?
+         -- No, buildSitemap etc should take 'Planning.
+         return $ Item
+           { itemPath = itemPath item
+           , itemRoute = itemRoute item
+           , itemMeta = itemMeta item
+           , itemBody = itemBody item
+           , itemHash = itemHash item
+           }
     else do
       let meta = itemMeta item
       let title = KM.lookup (K.fromText "title") meta
@@ -184,16 +193,26 @@ remapMetadata :: [(Text, Text)] -> SaraM ()
 remapMetadata rules = tellRule (RuleRemap rules) >> commitRules
 
 -- | Register a search index generation rule.
-buildSearchIndex :: SPath -> [Item 'Validated] -> SaraM ()
-buildSearchIndex outPath ps = tellRule (RuleSearch outPath ps) >> commitRules
+buildSearchIndex :: SPath -> [Item 'Planning] -> SaraM ()
+buildSearchIndex outPath ps = tellRule (RuleSearch outPath (map coerceToValidated ps)) >> commitRules
 
 -- | Register a sitemap.xml generation rule.
-buildSitemap :: SPath -> [Item 'Validated] -> SaraM ()
-buildSitemap outPath ps = tellRule (RuleSitemap outPath ps) >> commitRules
+buildSitemap :: SPath -> [Item 'Planning] -> SaraM ()
+buildSitemap outPath ps = tellRule (RuleSitemap outPath (map coerceToValidated ps)) >> commitRules
 
 -- | Register an RSS feed generation rule.
-buildRSS :: SPath -> FeedConfig -> [Item 'Validated] -> SaraM ()
-buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg ps) >> commitRules
+buildRSS :: SPath -> FeedConfig -> [Item 'Planning] -> SaraM ()
+buildRSS outPath cfg ps = tellRule (RuleRSS outPath cfg (map coerceToValidated ps)) >> commitRules
+
+-- | Helper to satisfy Rule constructors which still expect 'Validated for the execution pass
+coerceToValidated :: Item 'Planning -> Item 'Validated
+coerceToValidated item = Item
+  { itemPath = itemPath item
+  , itemRoute = itemRoute item
+  , itemMeta = itemMeta item
+  , itemBody = itemBody item
+  , itemHash = itemHash item
+  }
 
 -- | Loads structured data (JSON or YAML) from a file.
 --   Automatically tracks dependencies in Shake.

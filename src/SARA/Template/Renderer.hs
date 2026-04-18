@@ -56,31 +56,30 @@ renderTemplate env tplPathString ctx = do
   _ <- askOracle (TemplateOracle tplPathString)
   let tplPath = T.pack tplPathString
   
-  -- 1. Get or create the MVar for this specific template path
-  mvar <- atomicModifyIORef' (envState env) $ \s ->
-    case Map.lookup tplPath (stateTemplateCache s) of
-      Just m  -> (s, m)
-      Nothing -> 
-        let m = unsafePerformIO (newMVar Nothing)
-        in (s { stateTemplateCache = Map.insert tplPath m (stateTemplateCache s) }, m)
-  
-  -- 2. Use the MVar to ensure only one thread compiles this template
-  tplRes <- liftIO $ modifyMVar mvar $ \case
-    Just res -> return (Just res, res)
+  -- 1. Get the pre-initialized MVar for this specific template path (Fix U-02)
+  state <- liftIO $ readIORef (envState env)
+  case Map.lookup tplPath (stateTemplateCache state) of
+    Just mvar -> do
+      -- 2. Use the MVar to ensure only one thread compiles this template
+      tplRes <- liftIO $ modifyMVar mvar $ \case
+        Just res -> return (Just res, res)
+        Nothing -> do
+          -- This is the first thread to reach here
+          res <- (Right <$> Mustache.compileMustacheFile tplPathString) `E.catches` 
+                   [ E.Handler $ \(e :: Mustache.MustacheException) -> 
+                       let (ln, col, msg) = extractMustacheErrorDetails e
+                       in return $ Left $ TemplateCompileError tplPath ln col msg
+                   , E.Handler $ \(e :: E.SomeException) -> 
+                       return $ Left $ TemplateCompileError tplPath Nothing Nothing (T.pack $ show e)
+                   ]
+          return (Just res, res)
+          
+      case tplRes of
+        Right tpl -> return $ Right $ TL.toStrict $ Mustache.renderMustache tpl ctx
+        Left err  -> return $ Left err
     Nothing -> do
-      -- This is the first thread to reach here
-      res <- (Right <$> Mustache.compileMustacheFile tplPathString) `E.catches` 
-               [ E.Handler $ \(e :: Mustache.MustacheException) -> 
-                   let (ln, col, msg) = extractMustacheErrorDetails e
-                   in return $ Left $ TemplateCompileError tplPath ln col msg
-               , E.Handler $ \(e :: E.SomeException) -> 
-                   return $ Left $ TemplateCompileError tplPath Nothing Nothing (T.pack $ show e)
-               ]
-      return (Just res, res)
-      
-  case tplRes of
-    Right tpl -> return $ Right $ TL.toStrict $ Mustache.renderMustache tpl ctx
-    Left err  -> return $ Left err
+      -- Should never happen if runBuild pre-populated correctly
+      return $ Left $ TemplateNotFound tplPath
 
 -- | Extract line, column and message from MustacheException if possible.
 extractMustacheErrorDetails :: Mustache.MustacheException -> (Maybe Int, Maybe Int, Text)

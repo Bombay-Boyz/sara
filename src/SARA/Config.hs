@@ -11,40 +11,36 @@ module SARA.Config
   ) where
 
 import Data.Text (Text)
-import GHC.Generics (Generic)
-import Data.Aeson (FromJSON(..), genericParseJSON, defaultOptions, fieldLabelModifier)
 import qualified Data.Yaml as Yaml
-import SARA.Security.PathGuard (ProjectRoot, mkProjectRoot)
+import GHC.Generics (Generic)
 import System.Directory (doesFileExist)
+import System.FilePath ((</>))
+import SARA.Security.PathGuard (ProjectRoot, mkProjectRoot)
+import qualified Data.Aeson as Aeson
+import System.Exit (exitFailure)
+import qualified Data.Text.IO as TIO
 
--- | Global configuration for a SARA site.
 data SaraConfig = SaraConfig
   { cfgSiteTitle       :: !Text
   , cfgSiteUrl         :: !Text
   , cfgSiteAuthor      :: !Text
-  , cfgDefaultTemplate :: !FilePath
   , cfgOutputDirectory :: !FilePath
   , cfgDryRun          :: !Bool
-  } deriving (Show, Eq, Generic)
+  } deriving (Show, Generic)
 
-instance FromJSON SaraConfig where
-  parseJSON = genericParseJSON defaultOptions
-    { fieldLabelModifier = \case
-        "cfgSiteTitle"       -> "title"
-        "cfgSiteUrl"         -> "baseUrl"
-        "cfgSiteAuthor"      -> "author"
-        "cfgDefaultTemplate" -> "defaultTemplate"
-        "cfgOutputDirectory" -> "outputDir"
-        "cfgDryRun"          -> "dryRun"
-        other                -> other
-    }
+instance Aeson.FromJSON SaraConfig where
+  parseJSON = Aeson.withObject "SaraConfig" $ \v -> SaraConfig
+    <$> v Aeson..: "title"
+    <*> v Aeson..: "baseUrl"
+    <*> v Aeson..: "author"
+    <*> v Aeson..:? "outputDir" Aeson..!= "_site"
+    <*> v Aeson..:? "dryRun" Aeson..!= False
 
 defaultConfig :: SaraConfig
 defaultConfig = SaraConfig
   { cfgSiteTitle       = "SARA Site"
-  , cfgSiteUrl         = "http://localhost:8080"
-  , cfgSiteAuthor      = "SARA Developer"
-  , cfgDefaultTemplate = "templates/default.html"
+  , cfgSiteUrl         = "http://localhost:8000"
+  , cfgSiteAuthor      = "SARA Author"
   , cfgOutputDirectory = "_site"
   , cfgDryRun          = False
   }
@@ -56,5 +52,7 @@ loadConfig path = do
   if exists
     then Yaml.decodeFileEither path >>= \case
       Right cfg -> return cfg
-      Left _ -> return defaultConfig
+      Left err -> do
+        putStrLn $ "SARA CONFIG ERROR: Failed to parse " ++ path ++ ": " ++ show err
+        exitFailure
     else return defaultConfig

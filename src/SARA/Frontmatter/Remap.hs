@@ -15,11 +15,10 @@ import SARA.Monad (SPath)
 
 -- | Industrial metadata remapper.
 --   Expects a list of (fromKey, toKey) pairs.
+--   Non-fatal: if a key is missing, it is simply skipped (Fix L-06).
 remapMetadata :: [(Text, Text)] -> FilePath -> Aeson.Object -> Either (SaraError 'EKFrontmatter) Aeson.Object
-remapMetadata rules pathString obj = foldr remap (Right obj) rules
+remapMetadata rules _pathString obj = Right $ foldr remap obj rules
   where
-    path = T.pack pathString
-    remap (from, to) (Right acc) = case KM.lookup (K.fromText from) acc of
-      Just val -> Right $ KM.insert (K.fromText to) val (KM.delete (K.fromText from) acc)
-      Nothing -> Left $ FrontmatterRemapMissing path from
-    remap _ (Left err) = Left err
+    remap (from, to) acc = case KM.lookup (K.fromText from) acc of
+      Just val -> KM.insert (K.fromText to) val (KM.delete (K.fromText from) acc)
+      Nothing -> acc

@@ -22,8 +22,9 @@ detectFormat :: Text -> FrontmatterFormat
 detectFormat t
   | "---\n" `T.isPrefixOf` t || "---\r\n" `T.isPrefixOf` t = FmYAML
   | "+++\n" `T.isPrefixOf` t || "+++\r\n" `T.isPrefixOf` t = FmTOML
-  | "{\n"   `T.isPrefixOf` t || "{\r\n"   `T.isPrefixOf` t = FmJSON
+  | "{\n" `T.isPrefixOf` t || "{\r\n" `T.isPrefixOf` t || "{" `T.isPrefixOf` (T.strip t) = FmJSON
   | otherwise = FmNone
+
 
 -- | Splits the file into (frontmatter, body).
 splitFrontmatter

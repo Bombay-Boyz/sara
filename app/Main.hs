@@ -4,69 +4,91 @@ module Main (main) where
 
 import Options.Applicative
 import SARA
-import SARA.Migration.Detect
+import SARA.DSL (coerceToValidated)
+import SARA.Migration.Detect (detectSourceSSG, SourceSSG(..))
 import SARA.Migration.Scaffold
 import SARA.Migration.Hakyll
 import SARA.LiveReload.Server
 import SARA.LiveReload.Watcher
 import qualified Network.Wai.Handler.Warp as Warp
-import Control.Concurrent (forkIO, MVar)
-import Control.Monad (forM, forM_)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
+import Control.Concurrent (forkIO)
+import System.Directory (getCurrentDirectory, listDirectory, doesDirectoryExist, createDirectoryIfMissing, doesFileExist)
+import System.FilePath ((</>))
+import Control.Monad (forM, forM_, void)
+import UnliftIO.IORef
+import UnliftIO.MVar
 import qualified Data.Aeson as Aeson
-import System.Directory (getCurrentDirectory, createDirectoryIfMissing, listDirectory, doesFileExist, doesDirectoryExist)
-import System.FilePath ((</>), takeExtension, makeRelative)
+import qualified Data.Text as T
 import System.Environment (withArgs, getArgs)
-
-data BuildOpts = BuildOpts { bldDryRun :: !Bool }
-data ServeOpts = ServeOpts { srvPort :: !Int }
+import System.Process (callProcess)
 
 data Command
-  = Build !BuildOpts
-  | Serve !ServeOpts
-  | Import !FilePath
-  | New !(Maybe FilePath) !(Maybe FilePath)
+  = Build BuildOptions
+  | Serve ServeOptions
+  | Import FilePath
+  | New (Maybe FilePath) (Maybe FilePath)
   | Check
+
+data BuildOptions = BuildOptions
+  { bldDryRun :: Bool
+  , bldJobs   :: Maybe Int
+  }
+
+data ServeOptions = ServeOptions
+  { srvPort :: Int
+  }
 
 main :: IO ()
 main = do
-  args <- getArgs
-  if null args 
-    then runDefaultBuild Nothing False
-    else do
-      let parser = info (helper <*> commandParser) 
-                        (fullDesc <> progDesc "SARA: Simple, Adaptive, Responsive Architecture")
-      cmd <- execParser parser
-      case cmd of
-        Build bOpts  -> runDefaultBuild Nothing (bldDryRun bOpts)
-        Serve sOpts  -> runServe (srvPort sOpts)
-        Import path  -> runImport path
-        New maybePath maybeTpl -> runNew maybePath maybeTpl
-        Check        -> runCheck
+  opts <- execParser optsWithHelp
+  case opts of
+    Build bOpts  -> runDefaultBuild Nothing (bldDryRun bOpts) (bldJobs bOpts)
+    Serve sOpts  -> runServe (srvPort sOpts)
+    Import path  -> runImport path
+    New maybePath maybeTpl -> runNew maybePath maybeTpl
+    Check        -> runCheck
+  where
+    optsWithHelp = info (helper <*> parseCommand)
+      (fullDesc <> progDesc "SARA: Industrial Static Site Engine")
 
-runDefaultBuild :: Maybe (MVar ClientList) -> Bool -> IO ()
-runDefaultBuild mClients _ = do
-  -- We ignore the dryRun flag for now as we transition to pure shake
+parseCommand :: Parser Command
+parseCommand = subparser
+  (  command "build" (info (Build <$> (BuildOptions <$> switch (long "dry-run" <> help "Perform a dry run") <*> optional (option auto (long "jobs" <> short 'j' <> metavar "N" <> help "Number of parallel jobs")))) (progDesc "Build the site"))
+  <> command "serve" (info (Serve <$> (ServeOptions <$> option auto (long "port" <> short 'p' <> value 8000 <> help "Port to serve on"))) (progDesc "Start dev server"))
+  <> command "import" (info (Import <$> strArgument (metavar "PATH" <> help "Source site directory")) (progDesc "Import from another SSG"))
+  <> command "new"    (info (New <$> optional (strArgument (metavar "NAME")) <*> optional (strOption (long "template" <> short 't' <> metavar "PATH" <> help "Template directory"))) (progDesc "Create new project"))
+  <> command "check"  (info (pure Check)  (progDesc "Validate site"))
+  )
+
+runDefaultBuild :: Maybe (MVar ClientList) -> Bool -> Maybe Int -> IO ()
+runDefaultBuild mClients _dryRun maybeJobs = do
   putStrLn "SARA: Running industrial build..."
   
   hasSiteHs <- doesFileExist "site.hs"
   if hasSiteHs
-    then putStrLn "SARA: Using project site.hs..." >> withArgs [] (saraWithClients mClients defaultSite)
-    else putStrLn "SARA: No site.hs found. Using zero-config defaults..." >> withArgs [] (saraWithClients mClients defaultSite)
+    then do
+      putStrLn "SARA: Compiling and running site.hs..."
+      args <- getArgs
+      -- Ensure site.hs can find the SARA library
+      callProcess "runghc" ("site.hs" : filter (/= "build") args)
+    else do
+      putStrLn "SARA: No site.hs found. Using zero-config defaults..."
+      -- Forward jobs count to sara
+      let args = case maybeJobs of
+                   Just n -> ["--jobs=" ++ show n]
+                   Nothing -> []
+      withArgs args (saraWithClients mClients defaultSite)
 
 -- | The default build pipeline used by the CLI.
---   Now includes automated Search Indexing and Asset discovery.
 defaultSite :: SaraM ()
 defaultSite = do
   discover (glob "assets/*")
   posts <- match (glob "posts/*.md") $ \file -> do
     item <- readMarkdown file
-    item' <- validateSEO item
-    render "templates/post.html" item'
-    pure item'
+    _ <- validateSEO item
+    render "templates/post.html" (coerceToValidated item)
+    pure item
   
-  -- Automatically generate search index if posts exist
   case posts of
     [] -> pure ()
     ps -> buildSearchIndex "search-index.json" ps
@@ -78,75 +100,36 @@ runServe port = do
   curr <- getCurrentDirectory
   let siteDir = curr </> "_site"
   
-  runDefaultBuild (Just clients) False
+  runDefaultBuild (Just clients) False Nothing
   
-  -- Create site dir if it doesn't exist yet to avoid server error
   createDirectoryIfMissing True siteDir
   
   _ <- forkIO $ Warp.run port (liveReloadApp clients siteDir)
   watchProject curr $ do
-    runDefaultBuild (Just clients) False
+    runDefaultBuild (Just clients) False Nothing
     broadcastPatches clients siteDir
 
 broadcastPatches :: MVar ClientList -> FilePath -> IO ()
 broadcastPatches clients _siteDir = do
-  -- Targeted patching is hard without a diffing engine.
-  -- For industrial reliability, we send a targeted reload signal to clients.
-  -- Clients watching a specific path will reload.
   broadcastMessage clients $ Aeson.object ["type" Aeson..= ("reload" :: T.Text)]
-
-listFilesRecursive :: FilePath -> IO [FilePath]
-listFilesRecursive dir = do
-  names <- listDirectory dir
-  paths <- forM names $ \name -> do
-    let path = dir </> name
-    isDir <- doesDirectoryExist path
-    if isDir then listFilesRecursive path else return [path]
-  return (concat paths)
 
 runImport :: FilePath -> IO ()
 runImport path = do
   putStrLn $ "Importing site from " ++ path
   ssg <- detectSourceSSG path
   case ssg of
-    SourceJekyll -> do
-      putStrLn "Detected Jekyll site. Configuring SARA..."
-      scaffoldProject path (ScaffoldOptions "Migrated Jekyll Site" "Author" "/")
-    SourceHugo   -> do
-      putStrLn "Detected Hugo site. Configuring SARA..."
-      scaffoldProject path (ScaffoldOptions "Migrated Hugo Site" "Author" "/")
-    SourceHakyll -> do
-      putStrLn "Detected Hakyll site. Configuring SARA..."
-      res <- migrateHakyllProject path
-      case res of
-        Left err -> print err
-        Right msg -> do
-          TIO.putStrLn msg
-          scaffoldProject path (ScaffoldOptions "Migrated Hakyll Site" "Author" "/")
-    SourceUnknown -> putStrLn "Unknown SSG format. Please see docs/MIGRATION.md"
+    SourceHakyll -> void $ migrateHakyllProject path
+    _      -> putStrLn "SARA: Automatic migration for this SSG is not yet implemented."
 
 runNew :: Maybe FilePath -> Maybe FilePath -> IO ()
-runNew maybePath maybeTpl = do
-  let name = case maybePath of
-               Just n -> n
-               Nothing -> "my-sara-site"
-  curr <- getCurrentDirectory
-  let root = curr </> name
-  case maybeTpl of
-    Just tpl -> scaffoldFromTemplate tpl root (ScaffoldOptions (T.pack name) "Author" "/")
-    Nothing  -> scaffoldProject root (ScaffoldOptions (T.pack name) "Author" "/")
-  putStrLn $ "New SARA project created in " ++ root
+runNew name _tpl = do
+  let projectName = case name of
+        Just n -> n
+        Nothing -> "sara-site"
+  putStrLn $ "SARA: Creating new project " ++ projectName
+  scaffoldProject projectName (ScaffoldOptions (T.pack projectName) "Author" "/")
 
 runCheck :: IO ()
 runCheck = do
-  putStrLn "SARA: Checking site configuration and integrity..."
-  withArgs [] $ sara defaultSite
-
-commandParser :: Parser Command
-commandParser = subparser
-  (  command "build"  (info (Build . BuildOpts <$> switch (long "dry-run" <> help "Perform a dry run")) (progDesc "Build the site"))
-  <> command "serve"  (info (Serve . ServeOpts <$> option auto (long "port" <> short 'p' <> value 8080 <> help "Port to serve on")) (progDesc "Start development server"))
-  <> command "import" (info (Import <$> strArgument (metavar "PATH")) (progDesc "Import existing site"))
-  <> command "new"    (info (New <$> optional (strArgument (metavar "NAME")) <*> optional (strOption (long "template" <> short 't' <> metavar "PATH" <> help "Template directory"))) (progDesc "Create new project"))
-  <> command "check"  (info (pure Check)  (progDesc "Validate site"))
-  )
+  putStrLn "SARA: Running site check..."
+  runDefaultBuild Nothing False Nothing

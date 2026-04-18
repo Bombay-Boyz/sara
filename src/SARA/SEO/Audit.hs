@@ -12,6 +12,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Maybe (isNothing)
 import qualified Data.List as L
+import Text.Read (readMaybe)
 
 data AuditResult = AuditPassed | AuditIssues FilePath [AnySaraError]
 
@@ -36,8 +37,12 @@ checkAltAttributes path tags =
 
 checkHeadingStructure :: SPath -> [Tag Text] -> [AnySaraError]
 checkHeadingStructure path tags =
-  let headings = [ read (T.unpack (T.drop 1 (getTagName t))) :: Int 
-                 | t <- tags, isTagOpen t, "h" `T.isPrefixOf` getTagName t, T.length (getTagName t) == 2, T.all (`elem` ("123456" :: String)) (T.drop 1 (getTagName t)) ]
+  let headings = [ h | t <- tags, isTagOpen t
+                 , let name = getTagName t
+                 , "h" `T.isPrefixOf` name
+                 , T.length name == 2
+                 , Just h <- [readMaybe (T.unpack (T.drop 1 name))]
+                 , h >= 1 && h <= 6 ]
       validate (prev, issues) h =
         if h > prev + 1
         then (h, AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h) : issues)

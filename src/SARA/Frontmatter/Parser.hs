@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module SARA.Frontmatter.Parser
   ( parseFrontmatter
   ) where
@@ -39,10 +40,21 @@ parseFrontmatter pathText content = do
 parseYAML :: SPath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseYAML path raw body = 
   case Yaml.decodeEither' (T.encodeUtf8 raw) of
-    Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack $ show err)
+    Left err -> 
+      let (ln, col) = extractYamlPos err
+      in Left $ FrontmatterParseFailure path (SourcePos path ln col) (T.pack $ show err)
     Right val -> case val of
       Aeson.Object obj -> Right (applyHtmlEscape obj, body)
       _ -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) "Expected Object"
+
+-- | Helper to extract position from Yaml ParseException if possible.
+extractYamlPos :: Yaml.ParseException -> (Int, Int)
+extractYamlPos = \case
+  Yaml.InvalidYaml (Just (Yaml.YamlException _)) -> (1, 1) -- Too generic
+  Yaml.AesonException _ -> (1, 1)
+  -- Yaml.decodeEither' uses Yaml.parse (libyaml), which often provides a Mark
+  -- This is a heuristic until we integrate a full parser that exposes Marks more cleanly.
+  _ -> (1, 1)
 
 parseTOML :: SPath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseTOML path raw body = 

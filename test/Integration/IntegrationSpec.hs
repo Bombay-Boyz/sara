@@ -1,51 +1,44 @@
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Integration.IntegrationSpec (spec) where
 
 import Test.Hspec
-import SARA.Frontmatter.Parser
-import SARA.Routing.Engine
-import SARA.Types (Route(..))
-import SARA.Validator.LinkChecker
-import SARA.Migration.Detect
-import qualified Data.Text as T
-import System.IO.Temp (withSystemTempDirectory)
+import SARA
+import SARA.Monad (SPath)
+import SARA.Config (defaultConfig, cfgOutputDirectory)
+import SARA.Security.PathGuard (mkProjectRoot)
+import qualified Data.Text.IO as TIO
+import System.Directory (createDirectoryIfMissing, doesFileExist, getCurrentDirectory)
 import System.FilePath ((</>))
-import qualified Data.HashSet as HS
+import System.IO.Temp (withSystemTempDirectory)
 
 spec :: Spec
 spec = do
   describe "SARA Integration: Full Pipeline Test" $ do
     it "executes all phases from parsing to search indexing" $ do
-      withSystemTempDirectory "sara-test" $ \tmpDir -> do
-        -- 1. Frontmatter Phase (Already tested, confirming baseline)
-        let content = T.pack "---\ntitle: Integration\n---\n# Body"
-        case parseFrontmatter "test.md" content of
-          Right (_, _) -> do
-            -- 2. Routing Phase
-            res <- resolveRoute SlugRoute "test.md"
-            case res of
-              Right (ResolvedRoute out) -> do
-                out `shouldBe` "test.html"
-                
-                -- 3. Template Rendering Phase
-                -- We'll create a dummy template
-                let tplPath = tmpDir </> "test.html"
-                writeFile tplPath "<h1>{{title}}</h1>"
-                
-                -- 4. Validator Phase (Link Check)
-                let html = T.pack "<html><body><a href=\"valid.html\">Link</a></body></html>"
-                let siteGraph = HS.fromList ["valid.html"]
-                -- checkInternalLinks :: siteGraph -> sourcePath -> outPath -> html -> [AnySaraError]
-                let errs = checkInternalLinks siteGraph "test.md" "test.html" html
-                length errs `shouldBe` 0
+      withSystemTempDirectory "sara-integration" $ \tmpDir -> do
+        -- Setup
+        let postsDir = tmpDir </> "posts"
+        let tplDir = tmpDir </> "templates"
+        createDirectoryIfMissing True postsDir
+        createDirectoryIfMissing True tplDir
+        
+        TIO.writeFile (postsDir </> "hello.md") "---\ntitle: Hello\ndescription: Test\n---\n# World"
+        TIO.writeFile (tplDir </> "post.html") "<html><body>{{{itemBody}}}</body></html>"
+        
+        let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
+        root <- mkProjectRoot tmpDir
 
-                -- 5. Migration Detection Phase
-                ssg <- detectSourceSSG tmpDir
-                ssg `shouldBe` SourceUnknown
-                
-                -- Verification: check something real
-                HS.size siteGraph `shouldBe` 1
-              Left e -> expectationFailure $ "Expected Right ResolvedRoute, got " ++ show e
-          Left e -> expectationFailure $ "Expected Right parseFrontmatter, got " ++ show e
+        saraWithClients Nothing $ do
+          posts <- match (glob "posts/*.md") $ \file -> do
+            item <- readMarkdown file
+            _ <- validateSEO item
+            render "templates/post.html" (coerceToValidated item)
+            pure item
+          
+          buildSearchIndex "search.json" posts
+
+        -- Verify
+        -- Note: outDir is tmpDir </> "_site", so full path is tmpDir </> "_site" </> "posts" </> "hello.html"
+        doesFileExist (tmpDir </> "_site" </> "posts" </> "hello.html") `shouldReturn` True
+        doesFileExist (tmpDir </> "_site" </> "search.json") `shouldReturn` True

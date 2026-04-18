@@ -39,19 +39,26 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.List as L
 import UnliftIO.IORef (atomicModifyIORef', readIORef)
 import System.IO (hFlush, stdout)
 import System.FilePath.Glob (globDir1, compile, match)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, canonicalizePath)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
 import qualified UnliftIO.Exception as E
 
-collectOutputs :: SaraEnv -> [RuleDecl] -> [FilePath]
-collectOutputs env decls =
+collectOutputs :: SaraEnv -> [RuleDecl] -> IO [FilePath]
+collectOutputs env decls = do
   let outDir = cfgOutputDirectory (envConfig env)
-  in [ outDir </> T.unpack p | decl <- decls, p <- declToOutput decl ]
+  state <- readIORef (envState env)
+  -- 1. Paths from items matching 'match' globs
+  let itemOutputs = [ T.unpack p | item <- Map.elems (stateItemCache state), let ResolvedRoute p = itemRoute item ]
+  -- 2. Paths from explicit render rules (which might be the same as #1)
+  let ruleOutputs = concat [ declToOutput decl | decl <- decls ]
+  
+  return $ map (outDir </>) (L.nub $ itemOutputs ++ map T.unpack ruleOutputs)
   where
     declToOutput = \case
       RuleRender _ _ outPath -> [outPath]
@@ -67,7 +74,7 @@ planRules :: SaraEnv -> [RuleDecl] -> Rules ()
 planRules env decls = do
   addItemOracle env
   -- Collect all output paths from decls to create a 'want' rule
-  let allOutputs = collectOutputs env decls
+  allOutputs <- liftIO $ collectOutputs env decls
   want allOutputs
 
   -- Default rule to ensure output directory exists
@@ -92,7 +99,32 @@ translateDecl env = \case
   RuleGlobal _         -> return ()
 
 genMatch :: SaraEnv -> GlobPattern -> (SPath -> SaraM (Item 'Validated)) -> Rules ()
-genMatch _ _ _ = return ()
+genMatch env g f = do
+  let patStr = T.unpack (unGlobPattern g)
+  files <- liftIO $ globDir1 (compile patStr) "."
+  let outDir = cfgOutputDirectory (envConfig env)
+  
+  -- We need to know the output path for EACH file.
+  -- These were already computed during the planning phase and stored in stateItemCache.
+  state <- liftIO $ readIORef (envState env)
+  let cache = stateItemCache state
+  
+  forM_ files $ \src -> do
+    case Map.lookup (T.pack src) cache of
+      Just item -> do
+        let ResolvedRoute outPath = itemRoute item
+        let fullOutPath = outDir </> T.unpack outPath
+        fullOutPath %> \o -> do
+          -- Actually build it
+          realItem <- askItem env (T.pack src)
+          -- In SARA, the 'match' block often does the rendering too.
+          -- But if it just returns an item, we might need a default render?
+          -- Actually, looking at typical SARA usage:
+          -- match (glob "*.md") $ \file -> do { item <- readMarkdown file; render "tpl.html" item; return item }
+          -- In this case, 'render' ALREADY registers a RuleRender.
+          -- If the user DOESN'T call render, we shouldn't write a file.
+          return ()
+      Nothing -> return ()
 
 genDiscover :: SaraEnv -> GlobPattern -> Rules ()
 genDiscover env g = do
@@ -138,11 +170,11 @@ genRender env tplPath item outPath = do
     case guardPath (envRoot env) (T.unpack $ itemPath realItem) of
       Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
       Right safeSrc -> do
-        case guardPath (envRoot env) (T.unpack tplPath) of
-          Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
-          Right safeTpl -> do
-            needBlake3 [unSafePath safeSrc, unSafePath safeTpl]
-            
+        absTpl <- liftIO $ canonicalizePath (T.unpack tplPath)
+        let safeTplPath = T.pack absTpl
+        state <- liftIO $ readIORef (envState env)
+        case Map.lookup safeTplPath (stateTemplateCache state) of
+          Just mvar -> do
             let config = envConfig env
             let siteMeta = KM.fromList
                   [ (K.fromText "siteTitle", Aeson.String (cfgSiteTitle config))
@@ -152,7 +184,7 @@ genRender env tplPath item outPath = do
             let itemWithBody = KM.insert (K.fromText "itemBody") (Aeson.String (itemBody realItem)) (itemMeta realItem)
             let ctx = Aeson.Object $ KM.union itemWithBody siteMeta
             
-            renderTemplate env (unSafePath safeTpl) ctx >>= \case
+            renderTemplate env (T.unpack tplPath) ctx >>= \case
               Left err -> fail $ T.unpack $ renderErrorColor err
               Right html -> do
                 -- Inject real LQIPs by scanning for magic tokens

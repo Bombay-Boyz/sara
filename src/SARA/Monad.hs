@@ -32,13 +32,14 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
-import SARA.Error (AnySaraError, SaraError, SaraErrorKind(..))
+import SARA.Error (AnySaraError(..), SaraError(..), SaraErrorKind(..), SourcePos(..))
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Route(..))
 import qualified Text.Mustache as Mustache
 import UnliftIO.MVar (MVar)
 import GHC.Generics (Generic)
 import Control.Monad (unless)
 import SARA.Markdown.Shortcode (Shortcode)
+import UnliftIO.Exception (throwIO)
 
 -- | The site graph tracks all resolved output paths.
 type SiteGraph = HashSet SPath
@@ -120,7 +121,11 @@ readFileTracked p = do
 readTextFileTracked :: SPath -> SaraM Text
 readTextFileTracked p = do
   addItemDependency p
-  liftIO $ T.decodeUtf8 <$> BS.readFile (T.unpack p)
+  bs <- liftIO $ BS.readFile (T.unpack p)
+  case T.decodeUtf8' bs of
+    Right t -> return t
+    Left err -> do
+      throwIO (AnySaraError $ FrontmatterParseFailure p (SourcePos p 1 1) (T.pack $ show err))
 
 -- | Declarations produced by the DSL.
 data RuleDecl

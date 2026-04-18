@@ -28,8 +28,8 @@ import qualified BLAKE3
 -- | Industrial path type using Text for performance and safety.
 type SPath = Text
 
--- | 'v' is a phantom type: 'Unvalidated or 'Validated.
-data ValidationState = Unvalidated | Validated
+-- | 'v' is a phantom type: 'Planning, 'Unvalidated or 'Validated.
+data ValidationState = Planning | Unvalidated | Validated
 
 data Item (v :: ValidationState) = Item
   { itemPath     :: !SPath

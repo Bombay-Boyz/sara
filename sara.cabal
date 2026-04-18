@@ -118,6 +118,7 @@ executable sara
     filepath,
     directory,
     unliftio,
+    process,
     warp,
     aeson
   hs-source-dirs:   app

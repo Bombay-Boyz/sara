@@ -20,6 +20,7 @@ import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
 import qualified UnliftIO.Exception as E
 import SARA.Config (defaultConfig, cfgOutputDirectory)
 import SARA.Security.PathGuard (mkProjectRoot)
+import Control.Monad (void)
 
 spec :: Spec
 spec = do
@@ -39,7 +40,8 @@ spec = do
               remapMetadata [("fromKey", "toKey")]
               void $ match (glob "posts/*.md") $ \file -> do
                 item <- readMarkdown file
-                validateSEO item
+                _ <- validateSEO item
+                pure item
 
         -- Step 1: Pass 1 (Planning)
         let initialEnv = SaraEnv
@@ -60,7 +62,7 @@ spec = do
 
             -- Step 2: Pass 2 (Execution - simulate build behavior)
             let finalEnv = initialEnv { envRemapRules = allRemapRules, envIsPlanning = False }
-            resPass2 <- E.try (runReaderT (unSaraM (readMarkdown (T.pack $ postsDir </> "test.md"))) finalEnv) :: IO (Either E.SomeException (Item 'Unvalidated))
+            resPass2 <- E.try (runReaderT (unSaraM (readMarkdown (T.pack $ postsDir </> "test.md"))) finalEnv) :: IO (Either E.SomeException (Item 'Planning))
             case resPass2 of
               Right item -> do
                 KM.lookup "toKey" (itemMeta item) `shouldBe` Just (Aeson.String "someValue")
@@ -82,7 +84,8 @@ spec = do
               registerShortcode "custom" (\_ -> return "WORLD")
               match (glob "posts/*.md") $ \file -> do
                 item <- readMarkdown file
-                validateSEO item
+                _ <- validateSEO item
+                pure item
 
         let env = SaraEnv config root False [] stateRef
         -- Run in execution mode directly to test expansion
@@ -91,7 +94,7 @@ spec = do
         res <- E.bracket_ 
                  (setCurrentDirectory tmpDir)
                  (setCurrentDirectory curr)
-                 (E.try (runReaderT (unSaraM dsl) env) :: IO (Either E.SomeException [Item 'Validated]))
+                 (E.try (runReaderT (unSaraM dsl) env) :: IO (Either E.SomeException [Item 'Planning]))
         case res of
           Right [item] -> T.isInfixOf "Hello WORLD" (itemBody item) `shouldBe` True
           Right _ -> expectationFailure "Expected exactly one item"

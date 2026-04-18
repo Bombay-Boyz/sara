@@ -44,15 +44,16 @@ spec = do
           createDirectoryIfMissing True "templates"
           TIO.writeFile "templates/post.html" "<html><head><title>Industrial Stress Test</title></head><body>{{{itemBody}}}</body></html>"
           
-          -- Fix: use the correct config key 'outputDir'
-          TIO.writeFile "sara.yaml" "outputDir: _site"
+          -- Fix: use the correct config keys
+          TIO.writeFile "sara.yaml" "title: Stress Test\nauthor: Tester\nbaseUrl: /\noutputDir: _site"
           
           sara $ do
-            _ <- match (glob "posts/*.md") $ \file -> do
-              item <- readMarkdown file
-              item' <- validateSEO item
-              render "templates/post.html" item'
-              pure item'
+            items <- match (glob "posts/*.md") $ \file -> do
+                item <- readMarkdown file
+                item' <- validateSEO item
+                render "templates/post.html" item'
+                pure item
+
             return ()
         
           -- Verification: Check that at least one file was generated
