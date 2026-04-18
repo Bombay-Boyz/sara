@@ -24,10 +24,10 @@ import qualified Data.Text.IO as TIO
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
 import SARA.Monad (SaraEnv(..), SaraState(..), SPath)
 import SARA.Error (SaraError(..), SaraErrorKind(..))
-import Data.IORef
+import UnliftIO.IORef
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Map.Strict as Map
-import Control.Concurrent (MVar, newMVar, modifyMVar)
+import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
 import qualified Control.Exception as E
 
 newtype TemplateOracle = TemplateOracle FilePath
@@ -54,7 +54,7 @@ renderTemplate env tplPathString ctx = do
   let tplPath = T.pack tplPathString
   
   -- 1. Get or create the MVar for this specific template path
-  mvar <- liftIO $ atomicModifyIORef' (envState env) $ \s ->
+  mvar <- atomicModifyIORef' (envState env) $ \s ->
     case Map.lookup tplPath (stateTemplateCache s) of
       Just m  -> (s, m)
       Nothing -> 

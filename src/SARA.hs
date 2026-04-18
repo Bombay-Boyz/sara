@@ -23,17 +23,17 @@ import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
 import SARA.LiveReload.Server (broadcastMessage, ClientList)
 import SARA.Template.Lucid (renderLucid)
 import Control.Monad.Reader (runReaderT)
-import Data.IORef (newIORef, readIORef)
+import UnliftIO.IORef (newIORef, readIORef)
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (getCurrentDirectory)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
-import Control.Concurrent (MVar)
+import UnliftIO.MVar (MVar)
 import qualified Data.Aeson as Aeson
 import System.CPUTime (getCPUTime)
-import Control.Exception (try, SomeException)
+import UnliftIO.Exception (try, SomeException)
 
 -- | Entry point for a SARA site.
 sara :: SaraM () -> IO ()
@@ -60,7 +60,7 @@ saraWithClients mClients m = do
         , envState      = stateRef
         }
   
-  -- Refactored to catch exceptions in IO
+  -- Refactored to catch exceptions using UnliftIO
   result <- try (runReaderT (unSaraM m) initialEnv) :: IO (Either SomeException ())
   
   case result of

@@ -33,8 +33,8 @@ import SARA.Asset.Discover (discoverAssets)
 import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import System.FilePath.Glob (globDir1, compile)
-import Data.IORef (atomicModifyIORef', readIORef)
-import Control.Monad (unless, void)
+import UnliftIO.IORef (atomicModifyIORef', readIORef)
+import Control.Monad (void)
 import Control.Monad.Reader (ask)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
@@ -49,7 +49,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Yaml as Yaml
 import System.FilePath (takeExtension, replaceExtension)
 import qualified SARA.Routing.Engine as REngine
-import Control.Exception (throwIO)
+import UnliftIO.Exception (throwIO)
 
 -- | Match source files by glob and run logic for each.
 match
@@ -74,7 +74,7 @@ route r item = do
   res <- liftIO $ REngine.resolveRoute r (T.unpack $ itemPath item)
   case res of
     Right resolved -> return $ item { itemRoute = resolved }
-    Left err -> liftIO $ throwIO (AnySaraError err)
+    Left err -> throwIO (AnySaraError err)
 
 -- | Read a Markdown file into an Item.
 readMarkdown :: SPath -> SaraM (Item 'Unvalidated)
@@ -89,7 +89,7 @@ readMarkdownWith customHandler file = do
     Right (meta, body) -> do
       let rules = envRemapRules env
       case Remap.remapMetadata rules (T.unpack file) meta of
-        Left err -> liftIO $ throwIO (AnySaraError err)
+        Left err -> throwIO (AnySaraError err)
         Right remappedMeta -> do
           if envIsPlanning env
             then -- During planning, we skip body rendering but keep metadata
@@ -101,7 +101,7 @@ readMarkdownWith customHandler file = do
                    , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
                    }
             else do
-              state <- liftIO $ readIORef (envState env)
+              state <- readIORef (envState env)
               let registry = stateShortcodeHandlers state
               -- 2. Expand shortcodes with industrial image support + registry
               let handler sc = case scName sc of
@@ -123,7 +123,7 @@ readMarkdownWith customHandler file = do
                 , itemBody = htmlBody
                 , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
                 }
-    Left err -> liftIO $ throwIO (AnySaraError err)
+    Left err -> throwIO (AnySaraError err)
 
 -- | Validate SEO properties.
 validateSEO :: Item 'Unvalidated -> SaraM (Item 'Validated)
@@ -150,7 +150,7 @@ validateSEO item = do
           , itemBody = itemBody item
           , itemHash = itemHash item
           }
-        (Nothing, _) -> liftIO $ throwIO (AnySaraError $ SEOTitleMissing (itemPath item))
+        (Nothing, _) -> throwIO (AnySaraError $ SEOTitleMissing (itemPath item))
         (_, Nothing) -> do
           -- Return as a warning instead of a hard error
           liftIO $ TIO.putStrLn $ renderAnyErrorColor $ AnySaraError $ SEODescriptionMissing (itemPath item)
@@ -208,17 +208,17 @@ loadData path = do
   case ext of
     ".json" -> case Aeson.decodeStrict content of
                  Just v -> return v
-                 Nothing -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) "Failed to parse JSON")
+                 Nothing -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) "Failed to parse JSON")
     ".yaml" -> case Yaml.decodeEither' content of
                  Right v -> return v
-                 Left err -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ show err))
-    _       -> liftIO $ throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ "Unsupported data format: " ++ ext))
+                 Left err -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ show err))
+    _       -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ "Unsupported data format: " ++ ext))
 
 -- | Register a custom shortcode handler.
 registerShortcode :: Text -> (Shortcode -> SaraM Text) -> SaraM ()
 registerShortcode name handler = do
   env <- ask
-  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+  atomicModifyIORef' (envState env) $ \s ->
     (s { stateShortcodeHandlers = Map.insert name handler (stateShortcodeHandlers s) }, ())
 
 -- | Generates a Base64 LQIP magic token for an image.
@@ -231,7 +231,7 @@ regexRoute pat repl = do
   res <- liftIO $ REngine.regexRoute pat repl
   case res of
     Right r -> return r
-    Left err -> liftIO $ throwIO (AnySaraError err)
+    Left err -> throwIO (AnySaraError err)
 
 -- | Convenience helper for glob patterns.
 glob :: Text -> GlobPattern

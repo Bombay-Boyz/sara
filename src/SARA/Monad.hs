@@ -20,12 +20,13 @@ module SARA.Monad
 
 import Control.Monad.Reader (ReaderT, MonadReader, ask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString as BS
-import Data.IORef (IORef, atomicModifyIORef')
+import UnliftIO.IORef (IORef, atomicModifyIORef')
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
@@ -33,7 +34,7 @@ import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError, SaraError, SaraErrorKind(..))
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Route(..))
 import qualified Text.Mustache as Mustache
-import Control.Concurrent (MVar)
+import UnliftIO.MVar (MVar)
 import GHC.Generics (Generic)
 import Control.Monad (unless)
 import SARA.Markdown.Shortcode (Shortcode)
@@ -78,18 +79,16 @@ data SaraEnv = SaraEnv
   }
 
 -- | The SARA monad stack for rule declaration.
---   Refactored to remove ExceptT in favor of IO exceptions (industrial standard).
 newtype SaraM a = SaraM
   { unSaraM :: ReaderT SaraEnv IO a
-  } deriving (Functor, Applicative, Monad, MonadIO, MonadReader SaraEnv)
+  } deriving (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, MonadReader SaraEnv)
 
 -- | Register a rule in the SARA environment.
---   Only effective during the planning phase.
 tellRule :: RuleDecl -> SaraM ()
 tellRule d = do
   env <- ask
   if envIsPlanning env
-    then liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    then atomicModifyIORef' (envState env) $ \s ->
       (s { stateLocalRules = d : stateLocalRules s }, ())
     else return ()
 
@@ -97,18 +96,17 @@ tellRule d = do
 commitRules :: SaraM ()
 commitRules = do
   env <- ask
-  liftIO $ do
-    locals <- atomicModifyIORef' (envState env) $ \s ->
-      (s { stateLocalRules = [] }, stateLocalRules s)
-    unless (null locals) $
-      atomicModifyIORef' (envState env) $ \s ->
-        (s { stateRules = locals ++ stateRules s }, ())
+  locals <- atomicModifyIORef' (envState env) $ \s ->
+    (s { stateLocalRules = [] }, stateLocalRules s)
+  unless (null locals) $
+    atomicModifyIORef' (envState env) $ \s ->
+      (s { stateRules = locals ++ stateRules s }, ())
 
 -- | Record a dynamic dependency for the current item.
 addItemDependency :: SPath -> SaraM ()
 addItemDependency p = do
   env <- ask
-  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+  atomicModifyIORef' (envState env) $ \s ->
     (s { stateCurrentDeps = p : stateCurrentDeps s }, ())
 
 -- | Read a file and automatically track it as a dependency.

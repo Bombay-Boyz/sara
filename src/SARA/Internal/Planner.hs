@@ -39,14 +39,14 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
-import Data.IORef (atomicModifyIORef', readIORef)
+import UnliftIO.IORef (atomicModifyIORef', readIORef)
 import System.IO (hFlush, stdout)
 import System.FilePath.Glob (globDir1, compile, match)
 import System.Directory (createDirectoryIfMissing)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
-import Control.Exception (try, SomeException)
+import qualified UnliftIO.Exception as E
 
 collectOutputs :: SaraEnv -> [RuleDecl] -> [FilePath]
 collectOutputs env decls =
@@ -301,7 +301,7 @@ addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
           liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateCurrentDeps = [] }, ())
           
           -- Run 'f' in execution mode (envIsPlanning should be False)
-          res <- liftIO $ try (runReaderT (unSaraM (f pathText)) env) :: Action (Either SomeException (Item 'Validated))
+          res <- liftIO $ E.try (runReaderT (unSaraM (f pathText)) env)
           
           -- Read and register collected dependencies in Shake
           finalState <- liftIO $ readIORef (envState env)
@@ -311,7 +311,7 @@ addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
           case res of
             Right item -> liftIO $ atomicModifyIORef' (envState env) $ \s ->
               (s { stateItemCache = Map.insert pathText item (stateItemCache s) }, ())
-            Left err -> fail $ show err
+            Left (err :: E.SomeException) -> fail $ show err
         [] -> fail $ "No compiler found for " ++ path
 
 matchGlob :: GlobPattern -> FilePath -> Bool
