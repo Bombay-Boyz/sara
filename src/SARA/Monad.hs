@@ -12,6 +12,8 @@ module SARA.Monad
   , tellRule
   , commitRules
   , addItemDependency
+  , readFileTracked
+  , readTextFileTracked
   , initialState
   ) where
 
@@ -19,6 +21,8 @@ import Control.Monad.Reader (ReaderT, MonadReader, ask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
+import qualified Data.Text.Encoding as T
+import qualified Data.ByteString as BS
 import Data.IORef (IORef, atomicModifyIORef')
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
@@ -104,6 +108,18 @@ addItemDependency p = do
   env <- ask
   liftIO $ atomicModifyIORef' (envState env) $ \s ->
     (s { stateCurrentDeps = p : stateCurrentDeps s }, ())
+
+-- | Read a file and automatically track it as a dependency.
+readFileTracked :: FilePath -> SaraM BS.ByteString
+readFileTracked p = do
+  addItemDependency p
+  liftIO $ BS.readFile p
+
+-- | Read a UTF-8 text file and automatically track it as a dependency.
+readTextFileTracked :: FilePath -> SaraM Text
+readTextFileTracked p = do
+  addItemDependency p
+  liftIO $ T.decodeUtf8 <$> BS.readFile p
 
 -- | Declarations produced by the DSL.
 data RuleDecl

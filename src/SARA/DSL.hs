@@ -23,7 +23,7 @@ module SARA.DSL
   ) where
 
 import SARA.Types
-import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), SaraState(..), tellRule, commitRules, addItemDependency)
+import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..), SaraState(..), tellRule, commitRules, addItemDependency, readFileTracked, readTextFileTracked)
 import SARA.Error (SaraError(..), AnySaraError(..), renderAnyErrorColor)
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
@@ -90,7 +90,7 @@ registerShortcode name handler = do
 readMarkdownWith :: (Shortcode -> SaraM Text) -> FilePath -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
   env <- ask
-  content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
+  content <- readTextFileTracked file
   case parseFrontmatter file content of
     Right (meta, body) -> do
       let rules = envRemapRules env
@@ -206,12 +206,10 @@ loadData :: FilePath -> SaraM Aeson.Value
 loadData path = do
   -- 1. Tell Shake to track this file as a dependency.
   tellRule (RuleDataDependency path)
-  
-  -- 2. Record this as a dynamic dependency for the current context.
-  addItemDependency path
 
-  -- 3. Read the file NOW (planning) to allow the DSL to use the data.
-  content <- liftIO $ BS.readFile path
+  -- 2. Read the file with automatic tracking.
+  content <- readFileTracked path
+
   let ext = takeExtension path
   case ext of
     ".json" -> case Aeson.decodeStrict content of
