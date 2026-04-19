@@ -60,10 +60,12 @@ import qualified SARA.Routing.Engine as REngine
 import UnliftIO.Exception (throwIO)
 
 -- | Match source files by glob and run logic for each.
+--   Industrial Grade: Enforces 'Validated constraint at the type level.
+--   User must call 'validateSEO' or equivalent to enter the build graph.
 match
   :: GlobPattern
-  -> (SPath -> SaraM (Item v))
-  -> SaraM [Item v]
+  -> (SPath -> SaraM (Item 'Validated))
+  -> SaraM [Item 'Validated]
 match g f = do
   env <- ask
   let patStr = T.unpack (unGlobPattern g)
@@ -76,34 +78,12 @@ match g f = do
     then do
       forM_ items $ \i -> do
         liftIO $ atomicModifyIORef' (envState env) $ \s ->
-          (s { stateItemCache = Map.insert (itemPath i) (coerceToValidated' i) (stateItemCache s) }, ())
+          (s { stateItemCache = Map.insert (itemPath i) i (stateItemCache s) }, ())
     else return ()
 
-  tellRule (RuleMatch g (coerceCompiler f))
+  tellRule (RuleMatch g f)
   commitRules
   return items
-
--- Helper to satisfy RuleMatch which expects 'Validated items for the oracle
-coerceCompiler :: (SPath -> SaraM (Item v)) -> (SPath -> SaraM (Item 'Validated))
-coerceCompiler f p = do
-  item <- f p
-  return $ Item
-    { itemPath = itemPath item
-    , itemRoute = itemRoute item
-    , itemMeta = itemMeta item
-    , itemBody = itemBody item
-    , itemHash = itemHash item
-    }
-
--- | Internal helper to coerce any Item to Validated for the cache.
-coerceToValidated' :: Item v -> Item 'Validated
-coerceToValidated' item = Item
-  { itemPath = itemPath item
-  , itemRoute = itemRoute item
-  , itemMeta = itemMeta item
-  , itemBody = itemBody item
-  , itemHash = itemHash item
-  }
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
@@ -151,23 +131,13 @@ readMarkdownWith customHandler file = do
 
       htmlBody <- parseMarkdown handler (T.unpack file) body
       
-      if envIsPlanning env
-        then -- During planning, we keep metadata AND body
-             return $ Item
-               { itemPath = file
-               , itemRoute = UnresolvedRoute
-               , itemMeta = remappedMeta
-               , itemBody = htmlBody
-               , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-               }
-        else do
-          return $ Item
-            { itemPath = file
-            , itemRoute = UnresolvedRoute
-            , itemMeta = remappedMeta
-            , itemBody = htmlBody
-            , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-            }
+      return $ Item
+        { itemPath = file
+        , itemRoute = UnresolvedRoute
+        , itemMeta = remappedMeta
+        , itemBody = htmlBody
+        , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
+        }
     Left err -> throwIO (AnySaraError err)
 
 -- | Validate SEO properties.

@@ -89,7 +89,9 @@ copyAndTranslate root src dst translate = do
            then do
              text <- TIO.readFile srcPath
              case translate srcPath text of
-               Left _ -> copyFile srcPath dstPath -- Fallback to raw copy
+               Left _ -> do
+                 TIO.putStrLn $ "WARNING: Translation failed for " <> T.pack srcPath <> ". Copying raw."
+                 copyFile srcPath dstPath
                Right translated -> TIO.writeFile dstPath translated
            else copyFile srcPath dstPath
 

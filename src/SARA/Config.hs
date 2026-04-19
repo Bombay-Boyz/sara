@@ -28,6 +28,7 @@ data SaraConfig = SaraConfig
   , cfgAllowedCommands :: ![Text]
   , cfgDefaultImageQuality :: !Int
   , cfgDefaultImageFormats :: ![Text] -- e.g. ["webp", "avif"]
+  , cfgSEOReportPath      :: !(Maybe FilePath)
   } deriving (Show, Generic)
 
 instance Aeson.FromJSON SaraConfig where
@@ -37,9 +38,10 @@ instance Aeson.FromJSON SaraConfig where
     <*> v Aeson..: "author"
     <*> v Aeson..:? "outputDir" Aeson..!= "_site"
     <*> v Aeson..:? "dryRun" Aeson..!= False
-    <*> v Aeson..:? "allowedCommands" Aeson..!= ["cp", "mv", "mkdir", "rm", "convert", "ffmpeg"]
+    <*> v Aeson..:? "allowedCommands" Aeson..!= ["cp", "mv", "mkdir", "convert", "ffmpeg"]
     <*> v Aeson..:? "imageQuality" Aeson..!= 80
     <*> v Aeson..:? "imageFormats" Aeson..!= ["webp", "jpg"]
+    <*> v Aeson..:? "seoReportPath" Aeson..!= Just ".sara/seo-report.json"
 
 defaultConfig :: SaraConfig
 defaultConfig = SaraConfig
@@ -48,9 +50,10 @@ defaultConfig = SaraConfig
   , cfgSiteAuthor      = "SARA Author"
   , cfgOutputDirectory = "_site"
   , cfgDryRun          = False
-  , cfgAllowedCommands = ["cp", "mv", "mkdir", "rm", "convert", "ffmpeg"]
+  , cfgAllowedCommands = ["cp", "mv", "mkdir", "convert", "ffmpeg"]
   , cfgDefaultImageQuality = 80
   , cfgDefaultImageFormats = ["webp", "jpg"]
+  , cfgSEOReportPath      = Just ".sara/seo-report.json"
   }
 
 -- | Load configuration from a YAML file, or return defaults.

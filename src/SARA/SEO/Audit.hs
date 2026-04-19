@@ -47,11 +47,17 @@ checkHeadingStructure path tags =
                  , T.length name == 2
                  , Just h <- [readMaybe (T.unpack (T.drop 1 name))]
                  , h >= 1 && h <= 6 ]
-      validate (prev, issues) h =
+      h1s = filter (== 1) headings
+      issues = case length h1s of
+        0 -> [AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Missing <h1> tag. Every page needs exactly one.")]
+        1 -> []
+        _ -> [AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Multiple <h1> tags detected. Every page needs exactly one.")]
+      
+      validate (prev, acc) h =
         if h > prev + 1
-        then (h, AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h) : issues)
-        else (h, issues)
-  in snd $ L.foldl' validate (0, []) headings
+        then (h, AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h) : acc)
+        else (h, acc)
+  in issues ++ snd (L.foldl' validate (0, []) headings)
 
 checkTitle :: SPath -> [Tag Text] -> [AnySaraError]
 checkTitle path tags =

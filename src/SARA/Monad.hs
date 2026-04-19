@@ -58,6 +58,8 @@ data SaraState = SaraState
   , stateShortcodeHandlers :: !(Map.Map Text (Shortcode -> SaraM Text))
   , stateTaxonomies        :: !(Map.Map Text Taxonomy)
   , stateSEOIssues         :: !(Map.Map FilePath [AnySaraError])
+  , stateHasSecurityIssues :: !Bool
+  , stateHasSEOIssues      :: !Bool
   } deriving (Generic)
 
 initialState :: SaraState
@@ -73,6 +75,8 @@ initialState = SaraState
   , stateShortcodeHandlers = Map.empty
   , stateTaxonomies = Map.empty
   , stateSEOIssues = Map.empty
+  , stateHasSecurityIssues = False
+  , stateHasSEOIssues = False
   }
 
 -- | Read-only environment for SARA.

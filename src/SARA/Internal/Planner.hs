@@ -22,7 +22,7 @@ import SARA.Security.PathGuard (guardPath)
 import SARA.Security.ShellGuard (validatePath)
 import SARA.Template.Renderer (renderTemplate)
 import SARA.Internal.Hash (needBlake3, askLQIP)
-import SARA.Error (AnySaraError(..), renderAnyErrorColor, renderErrorColor)
+import SARA.Error (AnySaraError(..), renderAnyErrorColor, renderErrorColor, errorDetails)
 import SARA.SEO.Audit (auditRenderedHTML, AuditResult(..))
 import SARA.Validator.LinkChecker (checkInternalLinks)
 import SARA.Validator.AssetChecker (checkAssetReferences)
@@ -35,6 +35,7 @@ import SARA.SEO.Feed (generateRSS)
 import GHC.Generics (Generic)
 import Control.Monad (forM_, void, unless)
 import Control.Monad.Reader (runReaderT)
+import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -60,8 +61,9 @@ collectOutputs env decls = do
   let itemOutputs = [ T.unpack p | item <- Map.elems (stateItemCache state), ResolvedRoute p <- [itemRoute item] ]
   -- 2. Paths from explicit render rules (which might be the same as #1)
   let ruleOutputs = concat [ declToOutput decl | decl <- decls ]
+  let reportFile = maybeToList (cfgSEOReportPath (envConfig env))
   
-  return $ map (outDir </>) (L.nub $ itemOutputs ++ map T.unpack ruleOutputs ++ ["seo-report.json"])
+  return $ map (outDir </>) (L.nub $ itemOutputs ++ map T.unpack ruleOutputs ++ reportFile)
   where
     declToOutput = \case
       RuleRender _ _ outPath -> [outPath]
@@ -249,15 +251,13 @@ genRender env tplPath item outPath = do
                 
                 let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
                 case seoResult of
-                  AuditIssues _ issues -> do
-                    liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+                  AuditIssues p issues -> do
+                    recordIssues env (issues ++ allIssues) p
                     liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ allIssues)
                   AuditPassed -> do
-                    case allIssues of
-                      [] -> return ()
-                      _  -> do
-                        liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
-                        liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
+                    recordIssues env allIssues (T.unpack outPath)
+                    unless (null allIssues) $ 
+                      liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
                 -- Write the rendered file (skip if dry run)
                 unless (cfgDryRun (envConfig env)) $ do
                   liftIO $ createDirectoryIfMissing True (takeDirectory o)
@@ -300,14 +300,12 @@ genRenderPager env tplPath pager outPath = do
             let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
             case seoResult of
               AuditIssues p issues -> do
-                liftIO $ atomicModifyIORef' (envState env) $ \s -> 
-                  (s { stateHasErrors = True, stateSEOIssues = Map.insert p issues (stateSEOIssues s) }, ())
+                recordIssues env (issues ++ allIssues) p
                 liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ allIssues)
               AuditPassed -> do
-                unless (null allIssues) $ do
-                  liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+                recordIssues env allIssues (T.unpack outPath)
+                unless (null allIssues) $ 
                   liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
-
             unless (cfgDryRun (envConfig env)) $ do
               liftIO $ createDirectoryIfMissing True (takeDirectory o)
               liftIO $ atomicWriteFile o finalHtml
@@ -335,14 +333,12 @@ genRenderRaw env html item outPath = do
     let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
     case seoResult of
       AuditIssues p issues -> do
-        liftIO $ atomicModifyIORef' (envState env) $ \s -> 
-          (s { stateHasErrors = True, stateSEOIssues = Map.insert p issues (stateSEOIssues s) }, ())
+        recordIssues env (issues ++ allIssues) p
         liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ allIssues)
       AuditPassed -> do
-        unless (null allIssues) $ do
-          liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+        recordIssues env allIssues (T.unpack outPath)
+        unless (null allIssues) $ 
           liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
-        
         -- Skip writing in dry run
         unless (cfgDryRun (envConfig env)) $ do
           liftIO $ createDirectoryIfMissing True (takeDirectory o)
@@ -466,12 +462,28 @@ matchGlob (GlobPattern p) path = match (compile (T.unpack p)) path
 -- | Generates a machine-readable SEO report for the entire site.
 genSEOReport :: SaraEnv -> Rules ()
 genSEOReport env = do
-  let outDir = cfgOutputDirectory (envConfig env)
-  let reportPath = outDir </> "seo-report.json"
-  
-  reportPath %> \o -> do
-    state <- liftIO $ readIORef (envState env)
-    let issues = stateSEOIssues state
-    unless (cfgDryRun (envConfig env)) $ do
-      liftIO $ createDirectoryIfMissing True (takeDirectory o)
-      liftIO $ Aeson.encodeFile o issues
+  case cfgSEOReportPath (envConfig env) of
+    Nothing -> return ()
+    Just relPath -> do
+      let outDir = cfgOutputDirectory (envConfig env)
+      let fullPath = outDir </> relPath
+      
+      fullPath %> \o -> do
+        state <- liftIO $ readIORef (envState env)
+        let issues = stateSEOIssues state
+        unless (cfgDryRun (envConfig env)) $ do
+          liftIO $ createDirectoryIfMissing True (takeDirectory o)
+          liftIO $ Aeson.encodeFile o issues
+
+-- | Industrial Grade Issue Tracking: Classifies and records issues by severity and type.
+recordIssues :: SaraEnv -> [AnySaraError] -> FilePath -> Action ()
+recordIssues env issues path = do
+  liftIO $ forM_ issues $ \(AnySaraError err) -> do
+    let (level, _, _, _) = errorDetails err
+    atomicModifyIORef' (envState env) $ \s ->
+      let s1 = if level == "seo" 
+               then s { stateHasSEOIssues = True, stateSEOIssues = Map.insertWith (++) path [AnySaraError err] (stateSEOIssues s) }
+               else if level == "security"
+               then s { stateHasSecurityIssues = True, stateHasErrors = True }
+               else s { stateHasErrors = True }
+      in (s1, ())

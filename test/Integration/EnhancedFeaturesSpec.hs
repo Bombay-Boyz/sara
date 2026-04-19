@@ -37,8 +37,8 @@ spec = do
               remapMetadata [("fromKey", "toKey")]
               void $ match (glob "posts/*.md") $ \file -> do
                 item <- readMarkdown file
-                _ <- validateSEO item
-                pure item
+                validated <- validateSEO item
+                pure validated
 
         -- Step 1: Pass 1 (Planning)
         let initialEnv = SaraEnv
@@ -82,8 +82,8 @@ spec = do
               registerShortcode "custom" (\_ -> return "WORLD")
               match (glob "posts/*.md") $ \file -> do
                 item <- readMarkdown file
-                _ <- validateSEO item
-                pure item
+                validated <- validateSEO item
+                pure validated
 
         let env = SaraEnv config root False [] stateRef Nothing
         -- Run in execution mode directly to test expansion
@@ -92,7 +92,7 @@ spec = do
         res <- E.bracket_ 
                  (setCurrentDirectory tmpDir)
                  (setCurrentDirectory curr)
-                 (E.try (runReaderT (unSaraM dsl) env) :: IO (Either E.SomeException [Item 'Planning]))
+                 (E.try (runReaderT (unSaraM dsl) env) :: IO (Either E.SomeException [Item 'Validated]))
         case res of
           Right [item] -> T.isInfixOf "Hello WORLD" (itemBody item) `shouldBe` True
           Right _ -> expectationFailure "Expected exactly one item"

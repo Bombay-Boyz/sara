@@ -12,7 +12,6 @@ import qualified Data.Text as T
 import SARA.Types (SafeRegex(..))
 import SARA.Error (SaraError(..), SaraErrorKind(..))
 import Text.Regex.PCRE.Text (compile, compBlank, execBlank)
-import qualified Data.List as L
 
 -- | Smart constructor for SafeRegex.
 mkSafeRegex :: Text -> IO (Either (SaraError 'EKSecurity) SafeRegex)
@@ -48,69 +47,70 @@ checkComplexity t =
 -- These are heuristics for ReDoS detection.
 -- A full regex parser for safety is out of scope, but we check common patterns.
 
+-- | Deep heuristic for ReDoS detection.
 hasNestedQuantifiers :: String -> Bool
-hasNestedQuantifiers s = 
-  any (\(prefix, suffix) -> 
-            not (null prefix) && last prefix == ')' 
-            && not (null suffix) && isQuantifier (head suffix)
-            && isQuantifierInLastGroup prefix
-         ) (allSplits s)
+hasNestedQuantifiers s = go s [] False
   where
-    isQuantifier c = c `elem` ("+*" :: String)
+    go [] _ _ = False
+    go (c:cs) stack groupHasQuant
+      | c == '(' = 
+          let isQuant = isNextQuantified cs 0
+          in go cs (isQuant : stack) False
+      | c == ')' = 
+          case stack of
+            (parentIsQuant : rest) -> 
+              (groupHasQuant && parentIsQuant) || go cs rest parentIsQuant
+            [] -> go cs [] False
+      | isQuantifier c = 
+          case stack of
+            (thisGroupIsQuant : _) -> thisGroupIsQuant || go cs stack True
+            [] -> go cs [] True
+      | otherwise = go cs stack groupHasQuant
 
-isQuantifierInLastGroup :: String -> Bool
-isQuantifierInLastGroup s = 
-  case L.elemIndex '(' (reverse s) of
-    Just i -> any (`elem` ("+*" :: String)) (take i (reverse s))
-    Nothing -> False
-
-allSplits :: [a] -> [([a], [a])]
-allSplits xs = [splitAt i xs | i <- [0..length xs]]
+    isQuantifier c = c `elem` ("+*{" :: String)
 
 hasAlternationInRepetition :: String -> Bool
-hasAlternationInRepetition s = go s (0 :: Int) False
+hasAlternationInRepetition s = go s [] False
   where
-    -- go string currentDepth hasAlternationAtThisDepth
-    go :: String -> Int -> Bool -> Bool
     go [] _ _ = False
-    go (c:cs) depth hasAlt
+    go (c:cs) stack groupHasAlt
       | c == '(' = 
-          -- Start a new group scope; reset hasAlt for this group
-          go cs (depth + 1) False || go cs depth hasAlt
+          let isQuant = isNextQuantified cs 0
+          in go cs (isQuant : stack) False
       | c == ')' = 
-          -- Check if THIS group (which may have had alternation) is quantified
-          let isQuantified = case cs of
-                ('+':_) -> True
-                ('*':_) -> True
-                ('{':_) -> True -- also catch {n,} quantifiers
-                _       -> False
-          -- FIX: only flag if this group had alternation AND is quantified
-          in (hasAlt && isQuantified) || go cs (max 0 (depth - 1)) False
-      | c == '|' = 
-          -- FIX: just record that we saw alternation at this depth, don't short-circuit
-          go cs depth True
-      | otherwise = go cs depth hasAlt
+          case stack of
+            (thisGroupIsQuant : rest) -> 
+              (groupHasAlt && thisGroupIsQuant) || go cs rest False
+            [] -> go cs [] False
+      | c == '|' = go cs stack True
+      | otherwise = go cs stack groupHasAlt
 
--- | Calculates nesting depth of quantifiers (specifically groups followed by + or *).
+-- | Calculates nesting depth of quantifiers.
 exceedsNestingDepth :: String -> Int -> Bool
-exceedsNestingDepth s limit = go s (0 :: Int) (0 :: Int)
+exceedsNestingDepth s limit = go s 0 0
   where
-    go [] _ maxDepth = maxDepth > limit
-    go (c:cs) currentDepth maxDepth
+    go [] _ maxD = maxD > limit
+    go (c:cs) depth maxD
       | c == '(' = 
-          let isQuantified = isNextQuantified cs (0 :: Int)
-          in if isQuantified
-             then go cs (currentDepth + 1) (max (currentDepth + 1) maxDepth)
-             else go cs currentDepth maxDepth
-      | c == ')' = 
-          if currentDepth > 0 then go cs (currentDepth - 1) maxDepth else go cs 0 maxDepth
-      | otherwise = go cs currentDepth maxDepth
+          if isNextQuantified cs 0
+          then go cs (depth + 1) (max (depth + 1) maxD)
+          else go cs depth maxD
+      | c == ')' = go cs (max 0 (depth - 1)) maxD
+      | otherwise = go cs depth maxD
 
-    isNextQuantified :: String -> Int -> Bool
-    isNextQuantified [] _ = False
-    isNextQuantified (x:xs) d
-      | x == '(' = isNextQuantified xs (d + 1)
-      | x == ')' = if d == 0 
-                   then not (null xs) && (head xs == '+' || head xs == '*')
-                   else isNextQuantified xs (d - 1)
-      | otherwise = isNextQuantified xs d
+-- | Industrial fix for quantifier detection.
+isNextQuantified :: String -> Int -> Bool
+isNextQuantified [] _ = False
+isNextQuantified (x:xs) d
+  | x == '(' = isNextQuantified xs (d + 1)
+  | x == ')' = if d == 0 
+               then isFollowedByQuantifier xs
+               else isNextQuantified xs (d - 1)
+  | otherwise = isNextQuantified xs d
+
+isFollowedByQuantifier :: String -> Bool
+isFollowedByQuantifier ('+':_) = True
+isFollowedByQuantifier ('*':_) = True
+isFollowedByQuantifier ('?':_) = True
+isFollowedByQuantifier ('{':_) = True
+isFollowedByQuantifier _       = False

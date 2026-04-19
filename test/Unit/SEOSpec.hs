@@ -17,7 +17,7 @@ spec = do
         _ -> expectationFailure "Should have found SEO issues"
 
     it "passes valid HTML" $ do
-      let html = "<html><head><title>Title</title><meta name=\"description\" content=\"A very detailed description of this wonderful site that meets length requirements.\"><meta property=\"og:title\" content=\"Title\"><meta property=\"og:image\" content=\"img.png\"></head><body><img src=\"test.png\" alt=\"text\"></body></html>"
+      let html = "<html><head><title>Title</title><meta name=\"description\" content=\"A very detailed description of this wonderful site that meets length requirements.\"><meta property=\"og:title\" content=\"Title\"><meta property=\"og:image\" content=\"img.png\"></head><body><h1>Main Title</h1><img src=\"test.png\" alt=\"text\"></body></html>"
       let res = auditRenderedHTML "test.html" html
       res `shouldBe` AuditPassed
 

@@ -97,6 +97,8 @@ saraWithClientsAndJobs mClients maybeJobs maybeConfig m = do
 
       finalState <- readIORef stateRef
       let hasErrors = stateHasErrors finalState
+      let hasSecurity = stateHasSecurityIssues finalState
+      let hasSEO = stateHasSEOIssues finalState
       let siteGraph = stateSiteGraph finalState
       
       end <- getCPUTime
@@ -110,8 +112,8 @@ saraWithClientsAndJobs mClients maybeJobs maybeConfig m = do
                       else 0
       
       let qs = QualitySeal
-            { qsSecurity = not hasErrors 
-            , qsSEO = not hasErrors
+            { qsSecurity = not hasSecurity 
+            , qsSEO = not hasSEO
             , qsPerformance = perfScore
             , qsItemCount = itemCount
             }

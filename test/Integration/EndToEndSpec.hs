@@ -21,7 +21,7 @@ spec = do
           createDirectory (tmpDir </> "posts")
           createDirectory (tmpDir </> "templates")
           TIO.writeFile (tmpDir </> "posts" </> "test.md") 
-            "---\ntitle: E2E Industrial Test\ndescription: A test description\nauthor: E2E Tester\n---\n\n# Hello\nWelcome to SARA."
+            "---\ntitle: E2E Industrial Test\ndescription: A test description\nauthor: E2E Tester\n---\n\n## Hello\nWelcome to SARA."
           TIO.writeFile (tmpDir </> "templates" </> "post.html") 
             "<html><head><title>{{itemMeta.title}}</title><meta name=\"description\" content=\"A very long description that should pass the SARA industrial SEO character limit check easily.\"><meta property=\"og:title\" content=\"{{itemMeta.title}}\"><meta property=\"og:image\" content=\"img.png\"></head><body><h1>{{itemMeta.title}}</h1><main>{{{itemBody}}}</main></body></html>"
           TIO.writeFile (tmpDir </> "sara.yaml")

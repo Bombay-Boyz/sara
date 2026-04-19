@@ -19,6 +19,7 @@ import Development.Shake
 import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
+import System.IO (withFile, IOMode(ReadMode))
 import qualified BLAKE3
 import qualified Data.ByteString as BS
 import Data.Text (Text)
@@ -43,8 +44,18 @@ addBlake3Oracle env = void $ addOracle $ \(BLAKE3Oracle path) -> do
   res <- liftIO $ guardPath (envRoot env) path
   case res of
     Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
-    Right safePath -> 
-      liftIO $ show . (BLAKE3.hash Nothing :: [BS.ByteString] -> BLAKE3.Digest 32) . (:[]) <$> BS.readFile (unSafePath safePath)
+    Right safePath -> do
+      let realPath = unSafePath safePath
+      liftIO $ do
+        withFile realPath ReadMode $ \h -> do
+          let chunk = 64 * 1024 -- 64KB chunks
+          let loop acc = do
+                bs <- BS.hGet h chunk
+                if BS.null bs
+                  then return acc
+                  else loop (BLAKE3.update acc [bs])
+          let digest = BLAKE3.finalize :: BLAKE3.Hasher -> BLAKE3.Digest 32
+          show . digest <$> loop (BLAKE3.init Nothing)
 
 needBlake3 :: [FilePath] -> Action ()
 needBlake3 paths = do
@@ -66,7 +77,7 @@ addLQIPOracle env = void $ addOracle $ \(LQIPOracle path) -> do
       res' <- liftIO $ generateLQIP (unSafePath safePath)
       case res' of
         Right b64 -> return b64
-        Left err -> fail $ "LQIP Oracle failed for " ++ path ++ ": " ++ err
+        Left err -> fail $ T.unpack (renderAnyErrorColor (AnySaraError err))
 
 askLQIP :: FilePath -> Action Text
 askLQIP path = askOracle (LQIPOracle path)

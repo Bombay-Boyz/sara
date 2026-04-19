@@ -13,6 +13,7 @@ module SARA.Error
   , renderError       -- :: SaraError k -> Text
   , renderErrorColor  -- :: SaraError k -> Text  (ANSI coloured)
   , renderAnyErrorColor
+  , errorDetails
   ) where
 
 import Data.Text (Text)
@@ -260,11 +261,11 @@ errorDetails = \case
     in ("error", "E031", "Template rendering failed: " <> d, pos)
   TemplateKeyMissing t k -> ("error", "E032", "Missing key '" <> k <> "' in template: " <> t, Nothing)
   TemplateUnsafeInterpolation t ln -> ("error", "E033", "Unsafe raw interpolation detected in " <> t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))
-  SEOAltMissing _ pos src -> ("warning", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)
-  SEOHeadingSkip _ pos from to -> ("warning", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
-  SEOTitleMissing f -> ("warning", "W003", "Missing title in: " <> f, Nothing)
-  SEODescriptionMissing f -> ("warning", "W004", "Missing description in: " <> f, Nothing)
-  SEOGenericWarning _ pos msg -> ("warning", "W005", msg, Just pos)
+  SEOAltMissing _ pos src -> ("seo", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)
+  SEOHeadingSkip _ pos from to -> ("seo", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
+  SEOTitleMissing f -> ("seo", "W003", "Missing title in: " <> f, Nothing)
+  SEODescriptionMissing f -> ("seo", "W004", "Missing description in: " <> f, Nothing)
+  SEOGenericWarning _ pos msg -> ("seo", "W005", msg, Just pos)
   ValidatorBrokenLink _ pos target -> ("error", "V001", "Broken internal link to '" <> T.pack target <> "'", Just pos)
   ValidatorMissingAsset _ pos src -> ("error", "V002", "Missing asset reference '" <> src <> "'", Just pos)
   AssetProcessingFailed f d -> ("error", "A001", "Asset processing failed for " <> T.pack f <> ": " <> d, Nothing)
