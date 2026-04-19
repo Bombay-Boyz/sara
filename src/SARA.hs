@@ -21,7 +21,7 @@ import SARA.Monad (SaraM(..), SaraEnv(..), SaraState(..), RuleDecl(..), initialS
 import SARA.Security.ShellGuard (validateArg)
 import SARA.Internal.Engine (runBuild)
 import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
-import SARA.LiveReload.Server (broadcastMessage, ClientList)
+import SARA.LiveReload.Server (broadcastMessage, LiveReloadState)
 import SARA.Template.Lucid (renderLucid)
 import SARA.Asset.BinaryCheck (verifyBinaries)
 import Control.Monad.Reader (runReaderT)
@@ -32,7 +32,6 @@ import qualified Data.Text.IO as TIO
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
-import UnliftIO.MVar (MVar)
 import qualified Data.Aeson as Aeson
 import System.CPUTime (getCPUTime)
 import UnliftIO.Exception (try, SomeException)
@@ -42,11 +41,11 @@ sara :: SaraM () -> IO ()
 sara m = saraWithClientsAndJobs Nothing Nothing Nothing m
 
 -- | Entry point that supports broadcasting to live clients.
-saraWithClients :: Maybe (MVar ClientList) -> SaraM () -> IO ()
+saraWithClients :: Maybe LiveReloadState -> SaraM () -> IO ()
 saraWithClients mClients m = saraWithClientsAndJobs mClients Nothing Nothing m
 
 -- | Entry point that supports broadcasting and parallel job configuration.
-saraWithClientsAndJobs :: Maybe (MVar ClientList) -> Maybe Int -> Maybe SaraConfig -> SaraM () -> IO ()
+saraWithClientsAndJobs :: Maybe LiveReloadState -> Maybe Int -> Maybe SaraConfig -> SaraM () -> IO ()
 saraWithClientsAndJobs mClients maybeJobs maybeConfig m = do
   start <- getCPUTime
   

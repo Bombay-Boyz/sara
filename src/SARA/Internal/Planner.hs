@@ -15,10 +15,10 @@ import Development.Shake
 import Development.Shake.Classes
 import Development.Shake.FilePath
 import SARA.Monad (RuleDecl(..), SaraEnv(..), SaraM(..), SaraState(..), SPath)
-import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..), Route(..))
+import SARA.Types (Item(..), AssetKind(..), SomeAssetKind(..), GlobPattern(..), FeedConfig(..), ValidationState(..), Route(..), Pager(..), unSafePath)
 import qualified SARA.Routing.Engine as REngine
 import SARA.Config (SaraConfig(..))
-import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Security.PathGuard (guardPath)
 import SARA.Security.ShellGuard (validatePath)
 import SARA.Template.Renderer (renderTemplate)
 import SARA.Internal.Hash (needBlake3, askLQIP)
@@ -61,10 +61,11 @@ collectOutputs env decls = do
   -- 2. Paths from explicit render rules (which might be the same as #1)
   let ruleOutputs = concat [ declToOutput decl | decl <- decls ]
   
-  return $ map (outDir </>) (L.nub $ itemOutputs ++ map T.unpack ruleOutputs)
+  return $ map (outDir </>) (L.nub $ itemOutputs ++ map T.unpack ruleOutputs ++ ["seo-report.json"])
   where
     declToOutput = \case
       RuleRender _ _ outPath -> [outPath]
+      RuleRenderPager _ _ outPath -> [outPath]
       RuleRenderRaw _ _ outPath -> [outPath]
       RuleSearch outPath _ -> [outPath]
       RulePartialSearch outPath _ -> [T.pack (".cache" </> T.unpack outPath)]
@@ -85,21 +86,63 @@ planRules env decls = do
   outDir %> \out -> do
     liftIO $ createDirectoryIfMissing True out
 
-  mapM_ (translateDecl env) decls
+  -- Industrial Fix for Double-Build: Deduplicate discover rules
+  let discoverGlobs = [ g | RuleDiscover g <- decls ]
+  genAllDiscover env discoverGlobs
+
+  genSEOReport env
+
+  mapM_ (translateDecl env) [ d | d <- decls, not (isDiscover d) ]
+  where
+    isDiscover (RuleDiscover _) = True
+    isDiscover _                = False
 
 translateDecl :: SaraEnv -> RuleDecl -> Rules ()
 translateDecl env = \case
   RuleMatch g f        -> genMatch env g f
-  RuleDiscover g       -> genDiscover env g
+  RuleDiscover _       -> return () -- Handled by genAllDiscover
   RuleRender t i o     -> genRender env t i o
+  RuleRenderPager t p o -> genRenderPager env t p o
   RuleRenderRaw h i o  -> genRenderRaw env h i o
   RuleRemap _          -> return ()
   RuleSearch o ps      -> genSearch env o ps
   RulePartialSearch o i -> genPartialSearch env o i
   RuleSitemap o ps     -> genSitemap env o ps
   RuleRSS o cfg ps     -> genRSS env o cfg ps
-  RuleDataDependency p -> genDataDependency env p
   RuleGlobal _         -> return ()
+
+-- | Industrial Grade Discover: Deduplicates files across multiple globs efficiently.
+genAllDiscover :: SaraEnv -> [GlobPattern] -> Rules ()
+genAllDiscover env gs = do
+  allFiles <- liftIO $ do
+    fss <- mapM (\(GlobPattern g) -> globDir1 (compile (T.unpack g)) ".") gs
+    return $ HS.toList $ HS.fromList (concat fss)
+  let outDir = cfgOutputDirectory (envConfig env)
+  forM_ allFiles $ \src -> do
+    res <- liftIO $ guardPath (envRoot env) src
+    case res of
+      Left err -> liftIO $ TIO.putStrLn (renderAnyErrorColor (AnySaraError err))
+      Right safeSrc -> do
+        let out = outDir </> src
+        liftIO $ atomicModifyIORef' (envState env) $ \s ->
+          (s { stateSiteGraph = HS.insert (T.pack src) (stateSiteGraph s) }, ())
+        case inferAssetKind (envConfig env) (T.pack src) of
+          SomeAssetKind (ImageAsset spec) -> do
+            out %> \o -> do
+              need [unSafePath safeSrc]
+              needBlake3 [unSafePath safeSrc]
+              validatePath (unSafePath safeSrc)
+              validatePath o
+              unless (cfgDryRun (envConfig env)) $
+                processImage (cfgAllowedCommands (envConfig env)) spec safeSrc o
+          _ -> do
+            out %> \o -> do
+              need [unSafePath safeSrc]
+              needBlake3 [unSafePath safeSrc]
+              validatePath (unSafePath safeSrc)
+              validatePath o
+              unless (cfgDryRun (envConfig env)) $
+                copyFile' (unSafePath safeSrc) o
 
 genMatch :: SaraEnv -> GlobPattern -> (SPath -> SaraM (Item 'Validated)) -> Rules ()
 genMatch env g _f = do
@@ -161,37 +204,6 @@ atomicWriteFile path content = do
   hClose h
   renameFile tmpPath path
 
-genDiscover :: SaraEnv -> GlobPattern -> Rules ()
-genDiscover env g = do
-  let patStr = T.unpack (unGlobPattern g)
-  files <- liftIO $ globDir1 (compile patStr) "."
-  let outDir = cfgOutputDirectory (envConfig env)
-  forM_ files $ \src -> do
-    res <- liftIO $ guardPath (envRoot env) src
-    case res of
-      Left err -> liftIO $ TIO.putStrLn (renderAnyErrorColor (AnySaraError err))
-      Right safeSrc -> do
-        let out = outDir </> src
-        liftIO $ atomicModifyIORef' (envState env) $ \s ->
-          (s { stateSiteGraph = HS.insert (T.pack src) (stateSiteGraph s) }, ())
-        case inferAssetKind (T.pack src) of
-          SomeAssetKind (ImageAsset spec) -> do
-            out %> \o -> do
-              need [unSafePath safeSrc]
-              needBlake3 [unSafePath safeSrc]
-              validatePath (unSafePath safeSrc)
-              validatePath o
-              unless (cfgDryRun (envConfig env)) $
-                processImage spec safeSrc o
-          _ -> do
-            out %> \o -> do
-              need [unSafePath safeSrc]
-              needBlake3 [unSafePath safeSrc]
-              validatePath (unSafePath safeSrc)
-              validatePath o
-              unless (cfgDryRun (envConfig env)) $
-                copyFile' (unSafePath safeSrc) o
-
 genRender :: SaraEnv -> SPath -> Item 'Validated -> SPath -> Rules ()
 genRender env tplPath item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
@@ -252,6 +264,55 @@ genRender env tplPath item outPath = do
                   liftIO $ atomicWriteFile o finalHtml
           Nothing -> fail $ "Template not found in cache: " ++ T.unpack safeTplPath
 
+genRenderPager :: SaraEnv -> SPath -> Pager 'Validated -> SPath -> Rules ()
+genRenderPager env tplPath pager outPath = do
+  let outDir = cfgOutputDirectory (envConfig env)
+  let fullOutPath = outDir </> T.unpack outPath
+  liftIO $ atomicModifyIORef' (envState env) $ \s ->
+    (s { stateSiteGraph = HS.insert outPath (stateSiteGraph s) }, ())
+
+  fullOutPath %> \o -> do
+    absTpl <- liftIO $ canonicalizePath (T.unpack tplPath)
+    let safeTplPath = T.pack absTpl
+    state <- liftIO $ readIORef (envState env)
+    case Map.lookup safeTplPath (stateTemplateCache state) of
+      Just _mvar -> do
+        let config = envConfig env
+        let siteMeta = KM.fromList
+              [ (K.fromText "siteTitle", Aeson.String (cfgSiteTitle config))
+              , (K.fromText "siteUrl",   Aeson.String (cfgSiteUrl config))
+              , (K.fromText "siteAuthor", Aeson.String (cfgSiteAuthor config))
+              ]
+        let ctx = Aeson.Object $ KM.insert (K.fromText "pager") (Aeson.toJSON pager) siteMeta
+        
+        renderTemplate env (T.unpack tplPath) ctx >>= \case
+          Left err -> fail $ T.unpack $ renderErrorColor err
+          Right html -> do
+            finalHtml <- injectLQIPs env html
+            
+            -- Validation
+            state' <- liftIO $ readIORef (envState env)
+            let graph = stateSiteGraph state'
+                linkIssues = checkInternalLinks graph "" outPath finalHtml -- No source path for virtual pager
+                assetIssues = checkAssetReferences graph "" outPath finalHtml
+                allIssues = linkIssues ++ assetIssues
+            
+            let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
+            case seoResult of
+              AuditIssues p issues -> do
+                liftIO $ atomicModifyIORef' (envState env) $ \s -> 
+                  (s { stateHasErrors = True, stateSEOIssues = Map.insert p issues (stateSEOIssues s) }, ())
+                liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ allIssues)
+              AuditPassed -> do
+                unless (null allIssues) $ do
+                  liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+                  liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
+
+            unless (cfgDryRun (envConfig env)) $ do
+              liftIO $ createDirectoryIfMissing True (takeDirectory o)
+              liftIO $ atomicWriteFile o finalHtml
+      Nothing -> fail $ "Template not found in cache: " ++ T.unpack safeTplPath
+
 genRenderRaw :: SaraEnv -> Text -> Item 'Validated -> SPath -> Rules ()
 genRenderRaw env html item outPath = do
   let outDir = cfgOutputDirectory (envConfig env)
@@ -273,15 +334,14 @@ genRenderRaw env html item outPath = do
 
     let seoResult = auditRenderedHTML (T.unpack outPath) finalHtml
     case seoResult of
-      AuditIssues _ issues -> do
-        liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+      AuditIssues p issues -> do
+        liftIO $ atomicModifyIORef' (envState env) $ \s -> 
+          (s { stateHasErrors = True, stateSEOIssues = Map.insert p issues (stateSEOIssues s) }, ())
         liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) (issues ++ allIssues)
       AuditPassed -> do
-        case allIssues of
-          [] -> return ()
-          _  -> do
-            liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
-            liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
+        unless (null allIssues) $ do
+          liftIO $ atomicModifyIORef' (envState env) $ \s -> (s { stateHasErrors = True }, ())
+          liftIO $ mapM_ (TIO.putStrLn . renderAnyErrorColor) allIssues
         
         -- Skip writing in dry run
         unless (cfgDryRun (envConfig env)) $ do
@@ -357,9 +417,6 @@ genRSS env outPath cfg items = do
     unless (cfgDryRun (envConfig env)) $
       liftIO $ generateRSS cfg realItems o
 
-genDataDependency :: SaraEnv -> SPath -> Rules ()
-genDataDependency _ path = action $ need [T.unpack path]
-
 -- | Load a single item by its source path. Uses a cache and an Oracle for dependency tracking.
 askItem :: SaraEnv -> SPath -> Action (Item 'Validated)
 askItem env path = do
@@ -405,3 +462,16 @@ addItemOracle env = void $ addOracle $ \(ItemOracle path) -> do
 
 matchGlob :: GlobPattern -> FilePath -> Bool
 matchGlob (GlobPattern p) path = match (compile (T.unpack p)) path
+
+-- | Generates a machine-readable SEO report for the entire site.
+genSEOReport :: SaraEnv -> Rules ()
+genSEOReport env = do
+  let outDir = cfgOutputDirectory (envConfig env)
+  let reportPath = outDir </> "seo-report.json"
+  
+  reportPath %> \o -> do
+    state <- liftIO $ readIORef (envState env)
+    let issues = stateSEOIssues state
+    unless (cfgDryRun (envConfig env)) $ do
+      liftIO $ createDirectoryIfMissing True (takeDirectory o)
+      liftIO $ Aeson.encodeFile o issues

@@ -33,7 +33,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError(..), SaraError(..), SaraErrorKind(..), SourcePos(..))
-import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Taxonomy(..))
+import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig, SPath, Taxonomy(..), Pager(..))
 import qualified Text.Mustache as Mustache
 import UnliftIO.MVar (MVar)
 import GHC.Generics (Generic)
@@ -57,6 +57,7 @@ data SaraState = SaraState
   , stateCurrentDeps   :: ![SPath]
   , stateShortcodeHandlers :: !(Map.Map Text (Shortcode -> SaraM Text))
   , stateTaxonomies        :: !(Map.Map Text Taxonomy)
+  , stateSEOIssues         :: !(Map.Map FilePath [AnySaraError])
   } deriving (Generic)
 
 initialState :: SaraState
@@ -71,6 +72,7 @@ initialState = SaraState
   , stateCurrentDeps = []
   , stateShortcodeHandlers = Map.empty
   , stateTaxonomies = Map.empty
+  , stateSEOIssues = Map.empty
   }
 
 -- | Read-only environment for SARA.
@@ -135,11 +137,11 @@ data RuleDecl
   = RuleMatch    !GlobPattern !(SPath -> SaraM (Item 'Validated))
   | RuleDiscover !GlobPattern
   | RuleRender   !SPath !(Item 'Validated) !SPath
+  | RuleRenderPager !SPath !(Pager 'Validated) !SPath
   | RuleRenderRaw !Text !(Item 'Validated) !SPath
   | RuleRemap    ![(Text, Text)]
   | RuleSearch   !SPath ![Item 'Validated]
   | RulePartialSearch !SPath !(Item 'Validated)
   | RuleSitemap  !SPath ![Item 'Validated]
   | RuleRSS      !SPath !FeedConfig ![Item 'Validated]
-  | RuleDataDependency !SPath
   | RuleGlobal   !(SaraM ())

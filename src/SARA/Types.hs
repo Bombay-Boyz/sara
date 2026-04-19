@@ -2,6 +2,11 @@
 {-# LANGUAGE DataKinds      #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DeriveGeneric  #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module SARA.Types
   ( ValidationState(..)
   , Item(..)
@@ -11,18 +16,24 @@ module SARA.Types
   , routeReplacement
   , routeLiteralPath
   , SPath
+  , SafePath(..)
+  , unSafePath
   , AssetFormat(..)
   , AssetKind(..)
   , ImageSpec(..)
   , ImageFormat(..)
+  , formatFromText
   , GlobPattern(..)
   , SafeRegex(..)
   , SomeAssetKind(..)
   , FeedConfig(..)
   , Taxonomy(..)
+  , Pager(..)
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Char (toLower)
 import qualified Data.Map.Strict as Map
 import qualified Data.Aeson as Aeson
 import GHC.Generics (Generic)
@@ -34,8 +45,39 @@ data Taxonomy = Taxonomy
   , taxMap   :: !(Map.Map Text [SPath])
   } deriving (Show, Generic)
 
--- | Industrial path type using Text for performance and safety.
-type SPath = Text
+-- | Context for a specific paginated page.
+data Pager v = Pager
+  { pagerItems       :: ![Item v]
+  , pagerCurrent     :: !Int
+  , pagerTotal       :: !Int
+  , pagerPageSize    :: !Int
+  , pagerHasNext     :: !Bool
+  , pagerHasPrev     :: !Bool
+  , pagerNextUrl     :: !(Maybe Text)
+  , pagerPrevUrl     :: !(Maybe Text)
+  } deriving (Show, Generic)
+
+instance Aeson.ToJSON (Item v) => Aeson.ToJSON (Pager v) where
+  toJSON p = Aeson.object
+    [ "items"    Aeson..= pagerItems p
+    , "current"  Aeson..= pagerCurrent p
+    , "total"    Aeson..= pagerTotal p
+    , "pageSize" Aeson..= pagerPageSize p
+    , "hasNext"  Aeson..= pagerHasNext p
+    , "hasPrev"  Aeson..= pagerHasPrev p
+    , "nextUrl"  Aeson..= pagerNextUrl p
+    , "prevUrl"  Aeson..= pagerPrevUrl p
+    ]
+
+-- | Industrial path type using a newtype for performance and safety.
+--   A SafePath is a witness that the path has been checked against the ProjectRoot.
+newtype SafePath = SafePath { unSafePath' :: FilePath }
+  deriving (Show, Eq, Generic)
+
+instance Aeson.ToJSON SafePath where
+  toJSON (SafePath p) = Aeson.String (T.pack p)
+
+type SPath = Text -- Keeping SPath for DSL backward compatibility but transitioning internals to SafePath
 
 -- | 'v' is a phantom type: 'Planning, 'Unvalidated or 'Validated.
 data ValidationState = Planning | Unvalidated | Validated
@@ -46,7 +88,15 @@ data Item (v :: ValidationState) = Item
   , itemMeta     :: !Aeson.Object
   , itemBody     :: !Text
   , itemHash     :: !(BLAKE3.Digest 256)
-  }
+  } deriving (Show, Generic)
+
+instance Aeson.ToJSON (Item v) where
+  toJSON i = Aeson.object
+    [ "path"  Aeson..= itemPath i
+    , "route" Aeson..= itemRoute i
+    , "meta"  Aeson..= itemMeta i
+    , "body"  Aeson..= itemBody i
+    ]
 
 data RouteState = Abstract | Resolved
 
@@ -83,6 +133,10 @@ routeLiteralPath _                = Nothing
 deriving instance Show (Route s)
 deriving instance Eq (Route s)
 
+instance Aeson.ToJSON (Route 'Resolved) where
+  toJSON (ResolvedRoute p) = Aeson.String p
+  toJSON UnresolvedRoute   = Aeson.Null
+
 data AssetFormat
   = FormatImage
   | FormatCSS
@@ -93,7 +147,17 @@ data AssetFormat
   deriving (Eq, Show)
 
 data ImageFormat = WebP | AVIF | JPEG | PNG
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Show, Generic, Enum, Bounded)
+
+-- | Helper to parse image format from text.
+formatFromText :: Text -> Maybe ImageFormat
+formatFromText t = case map toLower (T.unpack t) of
+  "webp" -> Just WebP
+  "avif" -> Just AVIF
+  "jpeg" -> Just JPEG
+  "jpg"  -> Just JPEG
+  "png"  -> Just PNG
+  _      -> Nothing
 
 data ImageSpec = ImageSpec
   { imgWidths  :: ![Int]
@@ -128,3 +192,7 @@ data FeedConfig = FeedConfig
   , feedAuthor      :: !Text
   , feedBaseUrl     :: !Text
   } deriving (Show, Generic)
+
+-- | Unwrap a SafePath.
+unSafePath :: SafePath -> FilePath
+unSafePath = unSafePath'

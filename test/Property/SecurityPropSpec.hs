@@ -4,6 +4,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import SARA.Security.PathGuard
+import SARA.Types (SafePath(..))
 import System.FilePath (splitDirectories)
 import qualified Data.List as L
 

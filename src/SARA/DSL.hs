@@ -16,6 +16,9 @@ module SARA.DSL
   , buildSitemap
   , buildRSS
   , loadData
+  , paginate
+  , renderPager
+  , renderPagerWith
   , registerTaxonomy
   , getTaxonomy
   , registerShortcode
@@ -24,6 +27,7 @@ module SARA.DSL
   , glob
   , void
   , SPath
+  , chunk
   ) where
 
 import SARA.Types
@@ -236,6 +240,61 @@ renderWith renderer item = do
   tellRule (RuleRenderRaw (renderer resolvedItem) resolvedItem outPath)
   commitRules
 
+-- | Slices a list of items and allows running logic for each page.
+--   Industrial Fix for Hugo/Hakyll: 
+--   Provides full control over path generation (\n -> "blog/" ++ show n)
+--   while maintaining type-safety and Shake dependencies.
+paginate 
+  :: Int                               -- ^ Items per page
+  -> [Item 'Validated]                 -- ^ Items to paginate
+  -> (Int -> SPath)                    -- ^ Path generator (page number to output path)
+  -> (Pager 'Validated -> SPath -> SaraM ()) -- ^ Action (e.g. \p path -> renderPager "tpl.html" p path)
+  -> SaraM ()
+paginate size items pathGen f = do
+  let totalItems = length items
+      totalPages = (totalItems + size - 1) `div` size
+      chunks     = chunk size items
+      pages      = zip [1..] chunks
+
+  forM_ pages $ \(n, chunkItems) -> do
+    let pagePath = pathGen n
+        pager = Pager
+          { pagerItems    = chunkItems
+          , pagerCurrent  = n
+          , pagerTotal    = totalPages
+          , pagerPageSize = size
+          , pagerHasNext  = n < totalPages
+          , pagerHasPrev  = n > 1
+          , pagerNextUrl  = if n < totalPages then Just (pathGen (n + 1)) else Nothing
+          , pagerPrevUrl  = if n > 1          then Just (pathGen (n - 1)) else Nothing
+          }
+    f pager pagePath
+
+-- | Render a Pager through a template.
+renderPager :: SPath -> Pager 'Validated -> SPath -> SaraM ()
+renderPager tpl pager outPath = tellRule (RuleRenderPager tpl pager outPath) >> commitRules
+
+-- | Render a Pager with a custom Haskell-based renderer.
+renderPagerWith :: (Pager 'Validated -> Text) -> Pager 'Validated -> SPath -> SaraM ()
+renderPagerWith renderer pager outPath = do
+  -- Industrial fix: Use RuleRenderRaw for pagers by wrapping it
+  let html = renderer pager
+  -- Create a dummy Item to satisfy RuleRenderRaw
+  let dummy = Item 
+        { itemPath = outPath
+        , itemRoute = ResolvedRoute outPath
+        , itemMeta = KM.empty
+        , itemBody = html
+        , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 html]
+        }
+  tellRule (RuleRenderRaw html dummy outPath)
+  commitRules
+
+-- Helper: Split a list into chunks of fixed size
+chunk :: Int -> [a] -> [[a]]
+chunk _ [] = []
+chunk n xs = let (h, t) = splitAt n xs in h : chunk n t
+
 -- | Register metadata remapping rules.
 remapMetadata :: [(Text, Text)] -> SaraM ()
 remapMetadata rules = tellRule (RuleRemap rules) >> commitRules
@@ -277,25 +336,32 @@ getTaxonomy key = do
   return $ Map.lookup key (stateTaxonomies state)
 
 -- | Loads structured data (JSON or YAML) from a file.
---   Automatically tracks dependencies in Shake.
+--   Automatically tracks dependencies in Shake and caches the result for the build session.
 loadData :: SPath -> SaraM Aeson.Value
 loadData path = do
-  -- 1. Tell Shake to track this file as a dependency.
-  tellRule (RuleDataDependency path)
-  
-  -- 2. Read the file with automatic tracking.
-  content <- readFileTracked path
+  env <- ask
+  -- 1. Check cache first
+  state <- liftIO $ readIORef (envState env)
+  case Map.lookup path (stateDataCache state) of
+    Just v -> return v
+    Nothing -> do
+      -- 2. Read the file with automatic tracking.
+      content <- readFileTracked path
 
-  let ext = takeExtension (T.unpack path)
-  case ext of
-    ".json" -> case Aeson.decodeStrict content of
-                 Just v -> return v
-                 Nothing -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) "Failed to parse JSON")
-    ".yaml" -> case Yaml.decodeEither' content of
-                 Right v -> return v
-                 Left err -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ show err))
-    _       -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ "Unsupported data format: " ++ ext))
+      let ext = takeExtension (T.unpack path)
+      val <- case ext of
+        ".json" -> case Aeson.decodeStrict content of
+                     Just v -> return v
+                     Nothing -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) "Failed to parse JSON")
+        ".yaml" -> case Yaml.decodeEither' content of
+                     Right v -> return v
+                     Left err -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ show err))
+        _       -> throwIO (AnySaraError $ AssetProcessingFailed (T.unpack path) (T.pack $ "Unsupported data format: " ++ ext))
 
+      -- 3. Update cache
+      liftIO $ atomicModifyIORef' (envState env) $ \s ->
+        (s { stateDataCache = Map.insert path val (stateDataCache s) }, ())
+      return val
 -- | Register a custom shortcode handler.
 registerShortcode :: Text -> (Shortcode -> SaraM Text) -> SaraM ()
 registerShortcode name handler = do

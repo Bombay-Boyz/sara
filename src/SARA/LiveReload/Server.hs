@@ -7,6 +7,7 @@ module SARA.LiveReload.Server
   , broadcastToPath
   , liveReloadApp
   , ClientList
+  , LiveReloadState(..)
   ) where
 
 import Control.Concurrent (MVar, newMVar, modifyMVar_)
@@ -27,8 +28,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as Map
 import Network.Socket (SockAddr(..))
-import Data.IORef
-import System.IO.Unsafe (unsafePerformIO)
+import Control.Concurrent.STM (TVar, newTVarIO, atomically, readTVar, writeTVar)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 
@@ -45,18 +45,18 @@ instance Ord ManagedClient where
 
 type ClientList = Map.Map ManagedClient Text
 
--- | Initialize client list.
-startLiveReloadServer :: IO (MVar ClientList)
-startLiveReloadServer = newMVar Map.empty
+data LiveReloadState = LiveReloadState
+  { lrsClients :: !(MVar ClientList)
+  , lrsCounter :: !(TVar Int)
+  }
 
--- | We use a simple global counter for client IDs to enable Map usage.
-{-# NOINLINE clientCounter #-}
-clientCounter :: IORef Int
-clientCounter = unsafePerformIO $ newIORef 0
+-- | Initialize live reload state.
+startLiveReloadServer :: IO LiveReloadState
+startLiveReloadServer = LiveReloadState <$> newMVar Map.empty <*> newTVarIO 0
 
 -- | Broadcast a JSON message to all connected clients.
-broadcastMessage :: Aeson.ToJSON a => MVar ClientList -> a -> IO ()
-broadcastMessage clientsMVar msg = modifyMVar_ clientsMVar $ \clientMap -> do
+broadcastMessage :: Aeson.ToJSON a => LiveReloadState -> a -> IO ()
+broadcastMessage state msg = modifyMVar_ (lrsClients state) $ \clientMap -> do
   let payload = Aeson.encode msg
   let clients = Map.keys clientMap
   results <- forConcurrently clients (sendMessage payload)
@@ -68,8 +68,8 @@ broadcastMessage clientsMVar msg = modifyMVar_ clientsMVar $ \clientMap -> do
       pure True
 
 -- | Broadcast a JSON message only to clients viewing a specific path.
-broadcastToPath :: Aeson.ToJSON a => MVar ClientList -> Text -> a -> IO ()
-broadcastToPath clientsMVar path msg = modifyMVar_ clientsMVar $ \clientMap -> do
+broadcastToPath :: Aeson.ToJSON a => LiveReloadState -> Text -> a -> IO ()
+broadcastToPath state path msg = modifyMVar_ (lrsClients state) $ \clientMap -> do
   let payload = Aeson.encode msg
   let targetClients = Map.keys $ Map.filter (== path) clientMap
   results <- forConcurrently targetClients (sendMessage payload)
@@ -83,13 +83,13 @@ broadcastToPath clientsMVar path msg = modifyMVar_ clientsMVar $ \clientMap -> d
       pure True
 
 -- | Legacy helper
-broadcastReload :: MVar ClientList -> IO ()
-broadcastReload mvar = broadcastMessage mvar (Aeson.object ["type" Aeson..= ("reload" :: Text)])
+broadcastReload :: LiveReloadState -> IO ()
+broadcastReload state = broadcastMessage state (Aeson.object ["type" Aeson..= ("reload" :: Text)])
 
 -- | Wai application that serves static files and handles WebSockets.
 
-liveReloadApp :: MVar ClientList -> FilePath -> Application
-liveReloadApp clientsMVar siteDir req respond = do
+liveReloadApp :: LiveReloadState -> FilePath -> Application
+liveReloadApp state siteDir req respond = do
   let path = pathInfo req
   case path of
     [".sara-internal"] -> do
@@ -102,7 +102,7 @@ liveReloadApp clientsMVar siteDir req respond = do
              else respond $ responseLBS status403 [("Content-Type", "text/plain")] "Access denied: Localhost only"
     _ -> WaiWS.websocketsOr WS.defaultConnectionOptions 
           (\pending -> if WS.requestPath (WS.pendingRequest pending) == "/live"
-                       then wsApp clientsMVar pending
+                       then wsApp state pending
                        else WS.rejectRequest pending "Not a live reload path") 
           (staticApp siteDir) req respond
 
@@ -115,20 +115,24 @@ staticApp :: FilePath -> Application
 staticApp siteDir = staticPolicy (addBase siteDir) $ \_ respond ->
   respond $ responseLBS status200 [("Content-Type", "text/plain")] "SARA Development Server"
 
-wsApp :: MVar ClientList -> WS.ServerApp
-wsApp clientsMVar pending = do
+wsApp :: LiveReloadState -> WS.ServerApp
+wsApp state pending = do
   conn <- WS.acceptRequest pending
   msg <- WS.receiveData conn :: IO Text
   case Aeson.decode (BSL.fromStrict $ TE.encodeUtf8 msg) of
     Just (Aeson.Object obj) | Just (Aeson.String path) <- Map.lookup "path" (toDataKeyMap obj) -> do
-       newId <- atomicModifyIORef' clientCounter (\c -> (c + 1, c + 1))
+       newId <- atomically $ do
+         curr <- readTVar (lrsCounter state)
+         let next = curr + 1
+         writeTVar (lrsCounter state) next
+         return next
        let client = ManagedClient conn newId
-       modifyMVar_ clientsMVar $ \clientMap -> pure (Map.insert client path clientMap)
+       modifyMVar_ (lrsClients state) $ \clientMap -> pure (Map.insert client path clientMap)
        putStrLn $ "Client subscribed to " ++ T.unpack path
        -- Industrial fix: ensure client is removed on disconnect
        handle (\(_ :: SomeException) -> return ()) $ 
          finally (forever $ void (WS.receiveData conn :: IO Text)) $
-           modifyMVar_ clientsMVar $ \clientMap -> pure (Map.delete client clientMap)
+           modifyMVar_ (lrsClients state) $ \clientMap -> pure (Map.delete client clientMap)
     _ -> WS.sendClose conn ("Expected subscribe message" :: Text)
 
 toDataKeyMap :: KM.KeyMap Aeson.Value -> Map.Map Text Aeson.Value

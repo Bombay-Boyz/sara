@@ -6,16 +6,15 @@ module Main (main) where
 
 import Options.Applicative
 import SARA
-import SARA.Migration.Detect (detectSourceSSG, SourceSSG(..))
-import SARA.Migration.Scaffold
-import SARA.Migration.Hakyll
-import SARA.LiveReload.Server (startLiveReloadServer, ClientList)
+import SARA.Migration.Engine (runMigration)
+import SARA.Migration.Scaffold (scaffoldProject, ScaffoldOptions(..))
+import SARA.LiveReload.Server (startLiveReloadServer, LiveReloadState)
 import SARA.LiveReload.Watcher
 import System.Directory (getCurrentDirectory, createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
 import System.Process (callProcess)
 import System.Environment (getArgs, withArgs)
-import Control.Concurrent (MVar)
 import qualified UnliftIO.Exception as E
+import qualified Data.Text as T
 
 data Commands
   = Build (Maybe Int)
@@ -104,13 +103,9 @@ runInit = do
 runImport :: FilePath -> IO ()
 runImport path = do
   putStrLn $ "SARA: Importing from " ++ path
-  detectSourceSSG path >>= \case
-    SourceHakyll -> do
-      res <- migrateHakyllProject path
-      case res of
-        Right msg -> putStrLn $ "SARA: " ++ show msg
-        Left err -> putStrLn $ "SARA Import Error: " ++ show err
-    _ -> putStrLn "SARA: Migration from this SSG is not yet automated. Please see SARA Master Guide."
+  runMigration path "." >>= \case
+    Right msg -> putStrLn $ "SARA: " ++ T.unpack msg
+    Left err -> putStrLn $ "SARA Import Error: " ++ show err
 
 runCheck :: IO ()
 runCheck = do
@@ -130,7 +125,7 @@ runClean = do
   E.handle (\(_ :: E.SomeException) -> return ()) $ removeDirectoryRecursive "_build"
   putStrLn "SARA: Clean complete."
 
-runDefaultBuild :: Maybe (MVar ClientList) -> Bool -> Maybe Int -> IO ()
+runDefaultBuild :: Maybe LiveReloadState -> Bool -> Maybe Int -> IO ()
 runDefaultBuild mClients _isIncremental maybeJobs = do
   createDirectoryIfMissing True "_site"
   -- Standard SARA entry point

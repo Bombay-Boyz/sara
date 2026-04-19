@@ -28,6 +28,7 @@ library
     SARA.Migration.Detect
     SARA.Migration.Scaffold
     SARA.Migration.Hakyll
+    SARA.Migration.Engine
     SARA.LiveReload.Server
     SARA.LiveReload.Watcher
     SARA.Security.PathGuard
@@ -140,6 +141,7 @@ test-suite sara-test
     Integration.MigrationSpec
     Integration.SmokeSpec
     Integration.StressSpec
+    Property.EveryFunctionSpec
     Property.FrontmatterPropSpec
     Property.HedgehogExhaustiveSpec
     Property.HedgehogSecuritySpec

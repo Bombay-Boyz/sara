@@ -24,7 +24,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
-import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Security.PathGuard (guardPath)
+import SARA.Types (unSafePath)
 import SARA.Monad (SaraEnv(..), SaraState(..))
 import SARA.Error (SaraError(..), SaraErrorKind(..), AnySaraError(..), renderAnyErrorColor)
 import UnliftIO.IORef

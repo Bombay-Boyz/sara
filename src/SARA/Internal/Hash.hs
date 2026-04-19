@@ -25,7 +25,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import SARA.Asset.Placeholder (generateLQIP)
 import SARA.Monad (SaraEnv(..))
-import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Security.PathGuard (guardPath)
+import SARA.Types (unSafePath)
 import SARA.Error (AnySaraError(..), renderAnyErrorColor)
 import qualified Data.Aeson as Aeson
 import qualified Data.Yaml as Yaml

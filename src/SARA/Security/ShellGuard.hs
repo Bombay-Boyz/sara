@@ -3,11 +3,13 @@ module SARA.Security.ShellGuard
   ( safeCmd
   , validateArg
   , validatePath
+  , validateCommand
   ) where
 
 import Development.Shake (Action, cmd)
 import SARA.Error (SaraError(..), SaraErrorKind(..), renderAnyErrorColor, AnySaraError(..))
 import qualified Data.Text as T
+import Data.Text (Text)
 
 -- | Execute an external command with arguments.
 --   NEVER uses shell string interpolation.
@@ -16,6 +18,15 @@ safeCmd
   -> [FilePath]  -- ^ Arguments
   -> Action ()
 safeCmd exe args = cmd (exe : args)
+
+-- | Validates if a command is allowed to run.
+validateCommand :: [Text] -> FilePath -> Action ()
+validateCommand allowed exe = 
+  let exeT = T.pack exe
+  in if exeT `elem` allowed
+     then return ()
+     else fail $ "SARA SECURITY ERROR: Command '" ++ exe ++ "' is not in the whitelist. "
+              ++ "Add it to 'allowedCommands' in sara.yaml to permit execution."
 
 -- | Pre-flight check: reject file paths containing shell metacharacters or NUL bytes.
 validateArg :: FilePath -> Either (SaraError 'EKSecurity) ()

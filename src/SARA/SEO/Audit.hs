@@ -61,7 +61,7 @@ checkTitle path tags =
      else 
        let titleText = innerText $ takeWhile (not . isTagCloseName "title") $ drop 1 $ dropWhile (not . isTagOpenName "title") tags
        in if T.length titleText > 60
-          then [AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Title tag is too long (> 60 chars)")] -- Using AltMissing as proxy for generic warning for now
+          then [AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Title tag is too long (> 60 chars)")]
           else []
 
 checkMetaDescription :: SPath -> [Tag Text] -> [AnySaraError]
@@ -74,7 +74,7 @@ checkMetaDescription path tags =
       let content = fromMaybe "" (getAttrib' "content" t)
           len = T.length content
       in if len < 50 || len > 160
-         then [AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Meta description should be between 50-160 chars")]
+         then [AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Meta description should be between 50-160 chars")]
          else []
 
 checkOpenGraph :: SPath -> [Tag Text] -> [AnySaraError]
@@ -83,8 +83,8 @@ checkOpenGraph path tags =
       hasOgTitle = any (\t -> getAttrib' "property" t == Just "og:title") metas
       hasOgImage = any (\t -> getAttrib' "property" t == Just "og:image") metas
       issues = []
-      issues1 = if not hasOgTitle then AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Missing og:title") : issues else issues
-      issues2 = if not hasOgImage then AnySaraError (SEOAltMissing path (SourcePos path 0 0) "Missing og:image") : issues1 else issues1
+      issues1 = if not hasOgTitle then AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Missing og:title") : issues else issues
+      issues2 = if not hasOgImage then AnySaraError (SEOGenericWarning path (SourcePos path 0 0) "Missing og:image") : issues1 else issues1
   in issues2
 
 -- | Helper for TagSoup that handles missing attributes safely.

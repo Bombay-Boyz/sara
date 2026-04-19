@@ -3,13 +3,12 @@
 
 module SARA.Security.PathGuard
   ( ProjectRoot(..)
-  , SafePath(..)
   , mkProjectRoot
   , guardPath
-  , unSafePath
   ) where
 
 import SARA.Error (SaraError(..), SaraErrorKind(..))
+import SARA.Types (SafePath(..))
 import System.FilePath (isAbsolute, makeRelative)
 import System.Directory (canonicalizePath, makeAbsolute)
 import qualified Data.Text as T
@@ -17,13 +16,6 @@ import qualified Data.List as L
 
 -- | Represents a validated root directory.
 newtype ProjectRoot = ProjectRoot FilePath deriving (Show, Eq)
-
--- | Represents a path that has been validated against traversal.
-newtype SafePath = SafePath FilePath deriving (Show, Eq)
-
--- | Unwrap.
-unSafePath :: SafePath -> FilePath
-unSafePath (SafePath p) = p
 
 -- | Smart constructor for ProjectRoot.
 mkProjectRoot :: FilePath -> IO ProjectRoot

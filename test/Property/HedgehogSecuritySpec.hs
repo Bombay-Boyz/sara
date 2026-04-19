@@ -9,6 +9,7 @@ import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import SARA.Security.PathGuard
+import SARA.Types (SafePath(..))
 import SARA.Security.HtmlEscape
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T

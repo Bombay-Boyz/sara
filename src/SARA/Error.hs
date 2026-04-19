@@ -17,6 +17,8 @@ module SARA.Error
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Aeson as Aeson
+import GHC.Generics (Generic)
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 import Control.Exception (Exception)
@@ -27,7 +29,10 @@ data SourcePos = SourcePos
   { spFile   :: !SPath
   , spLine   :: !Int
   , spColumn :: !Int
-  } deriving (Eq, Show)
+  } deriving (Eq, Show, Generic)
+
+instance Aeson.ToJSON SourcePos
+instance Aeson.FromJSON SourcePos
 
 -- | Discriminates how the build should respond to an error.
 data AuditLevel
@@ -106,6 +111,9 @@ data SaraError (k :: SaraErrorKind) where
   SEODescriptionMissing
     :: !SPath
     -> SaraError 'EKSEO
+  SEOGenericWarning
+    :: !SPath -> !SourcePos -> !Text
+    -> SaraError 'EKSEO
 
   -- Validator errors
   ValidatorBrokenLink
@@ -150,6 +158,16 @@ data SaraError (k :: SaraErrorKind) where
 -- | Existential wrapper so errors from all subsystems can be collected.
 data AnySaraError where
   AnySaraError :: SaraError k -> AnySaraError
+
+instance Aeson.ToJSON AnySaraError where
+  toJSON (AnySaraError e) =
+    let (header, code, body, pos) = errorDetails e
+    in Aeson.object
+      [ "level"   Aeson..= header
+      , "code"    Aeson..= code
+      , "message" Aeson..= body
+      , "pos"     Aeson..= pos
+      ]
 
 instance Exception AnySaraError
 
@@ -221,6 +239,7 @@ errorColorAnsi = \case
   SEOHeadingSkip {} -> annotate (color Yellow)
   SEOTitleMissing {} -> annotate (color Yellow)
   SEODescriptionMissing {} -> annotate (color Yellow)
+  SEOGenericWarning {} -> annotate (color Yellow)
   MigrationUnsupportedShortcode {} -> annotate (color Yellow)
   _ -> annotate (color Red)
 
@@ -245,6 +264,7 @@ errorDetails = \case
   SEOHeadingSkip _ pos from to -> ("warning", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
   SEOTitleMissing f -> ("warning", "W003", "Missing title in: " <> f, Nothing)
   SEODescriptionMissing f -> ("warning", "W004", "Missing description in: " <> f, Nothing)
+  SEOGenericWarning _ pos msg -> ("warning", "W005", msg, Just pos)
   ValidatorBrokenLink _ pos target -> ("error", "V001", "Broken internal link to '" <> T.pack target <> "'", Just pos)
   ValidatorMissingAsset _ pos src -> ("error", "V002", "Missing asset reference '" <> src <> "'", Just pos)
   AssetProcessingFailed f d -> ("error", "A001", "Asset processing failed for " <> T.pack f <> ": " <> d, Nothing)

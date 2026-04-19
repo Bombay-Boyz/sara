@@ -5,7 +5,7 @@ module SARA.Asset.Copy
   ) where
 
 import Development.Shake
-import SARA.Security.PathGuard
+import SARA.Types (SafePath(..))
 
 -- | Zero-copy asset passthrough using Shake's copyFile'
 copyAsset

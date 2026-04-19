@@ -36,7 +36,7 @@ escapeHtml = T.concatMap escapeChar
 -- | Safe keys that are allowed to use raw interpolation.
 --   LQIP tokens are managed by SARA and are safe base64 strings.
 saraManagedPrefix :: Text
-saraManagedPrefix = "__LQIP__:"
+saraManagedPrefix = "SARA_LQIP:"
 
 -- | Scans a template for raw interpolation (three mustaches) 
 --   and ensures they only use SARA-managed safe keys.
@@ -46,18 +46,21 @@ auditTemplateForRawInterpolation pathString content =
       -- Match {{{ key }}} or {{& key }}
       regex = "\\{\\{\\{([^}]+)\\}\\}\\}|\\{\\{\\&([^}]+)\\}\\}" :: Text
       
-      -- Extract matches with line numbers (simplified)
-      -- In a real version, we'd use a parser that tracks SourcePos
       lines' = T.lines content
       occurrences = [ (key, ln) 
                     | (ln, line) <- zip [1..] lines'
                     , let matches = (line =~ regex :: [[Text]])
-                    , not (null matches)
                     , m <- matches
-                    , let key = if not (T.null (m !! 1)) then m !! 1 else m !! 2
+                    , let key = extractKey m
+                    , not (T.null key)
                     ]
 
   in [ TemplateUnsafeInterpolation path line 
      | (key, line) <- occurrences
      , let k = T.strip key
      , not (saraManagedPrefix `T.isPrefixOf` k || k == "itemBody")]
+
+-- | Safely extracts the first non-empty capture group from a match.
+extractKey :: [Text] -> Text
+extractKey (_:g1:g2:_) = if not (T.null g1) then g1 else g2
+extractKey _           = ""
