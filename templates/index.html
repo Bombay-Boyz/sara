@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ siteTitle }}</title>
+  <meta name="description" content="{{ siteTitle }} — latest posts">
+</head>
+<body>
+  <header>
+    <p><a href="{{ siteUrl }}">{{ siteTitle }}</a></p>
+  </header>
+
+  <nav aria-label="Primary">
+    <ul>
+      <li><a href="{{ siteUrl }}">Home</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <h1>{{ siteTitle }}</h1>
+
+    <!--
+      Expects a "posts" list in context, each entry exposing:
+      title, url, date, excerpt. Degrades to an empty (but valid,
+      still-navigable) list if "posts" is absent or empty, per the
+      Web Engineering Standard's "content survives first" rule (0.5) —
+      an empty index is not a broken page.
+    -->
+    <ul>
+      {{#posts}}
+      <li>
+        <article>
+          <h2><a href="{{ url }}">{{ title }}</a></h2>
+          {{#date}}<p><time datetime="{{ date }}">{{ date }}</time></p>{{/date}}
+          {{#excerpt}}<p>{{ excerpt }}</p>{{/excerpt}}
+        </article>
+      </li>
+      {{/posts}}
+    </ul>
+  </main>
+
+  <footer>
+    <p>&copy; {{ siteAuthor }}</p>
+  </footer>
+</body>
+</html>

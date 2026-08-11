@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — {{ siteTitle }}</title>
+  {{#description}}<meta name="description" content="{{ description }}">{{/description}}
+  <meta property="og:title" content="{{ title }}">
+  <meta property="og:type" content="article">
+  {{#description}}<meta property="og:description" content="{{ description }}">{{/description}}
+</head>
+<body>
+  <header>
+    <p><a href="{{ siteUrl }}">{{ siteTitle }}</a></p>
+  </header>
+
+  <nav aria-label="Primary">
+    <ul>
+      <li><a href="{{ siteUrl }}">Home</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <article>
+      <h1>{{ title }}</h1>
+      <p>
+        <span>By {{ author }}</span>
+        {{#date}}<time datetime="{{ date }}">{{ date }}</time>{{/date}}
+      </p>
+      {{{ itemBody }}}
+    </article>
+  </main>
+
+  <footer>
+    <p>&copy; {{ siteAuthor }}</p>
+  </footer>
+</body>
+</html>

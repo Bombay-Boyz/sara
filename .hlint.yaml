@@ -1,0 +1,11 @@
+- functions:
+    - {name: System.Process.callCommand, message: "Use SARA.Security.ShellGuard.safeCmd instead for shell safety."}
+    - {name: System.Process.system, message: "Use SARA.Security.ShellGuard.safeCmd instead for shell safety."}
+    - {name: System.Process.rawSystem, message: "Use SARA.Security.ShellGuard.safeCmd instead for shell safety."}
+    - {name: Prelude.error, message: "Use ExceptT with typed errors instead of Prelude.error."}
+    - {name: Prelude.undefined, message: "Use ExceptT with typed errors instead of Prelude.undefined."}
+    - {name: Data.List.head, message: "Data.List.head is partial. Use pattern matching or Data.List.Safe."}
+    - {name: Data.List.tail, message: "Data.List.tail is partial. Use pattern matching or Data.List.Safe."}
+    - {name: "!!", message: "!! is partial. Use Data.List.!!? or similar safe lookup."}
+
+- ignore: {name: "Use module export list"} # We are fixing this globally but some stubs might still have it

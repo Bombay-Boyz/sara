@@ -1,0 +1,113 @@
+name: CI
+
+# Builds and tests SARA across the full GHC range the project claims to
+# support (see `tested-with` in sara.cabal). A version listed there but
+# not exercised here is an unverified claim, not a supported one — so
+# this matrix is kept in sync with that field, not narrower than it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: GHC ${{ matrix.ghc }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        ghc:
+          - "9.4.7"
+          - "9.6.6"
+          - "9.8.4"
+          - "9.10.1"
+          - "9.12.4"
+          - "9.14.1"
+        cabal: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GHC ${{ matrix.ghc }}
+        uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+
+      - name: Configure cabal (enable tests and benchmarks)
+        run: |
+          echo "packages: ." > cabal.project.local
+          echo "tests: True" >> cabal.project.local
+          echo "benchmarks: True" >> cabal.project.local
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project*') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-
+
+      - name: cabal update
+        run: cabal update
+
+      - name: Build (library, executable, tests, benchmarks)
+        # -Werror is opt-in (see the `werror` flag in sara.cabal) so a
+        # plain `cabal build` from a release tarball doesn't hard-fail
+        # on a future GHC's new warnings; CI explicitly opts in here so
+        # the zero-warnings guarantee is still verified on every commit
+        # across every supported compiler.
+        run: cabal build all --flags=+werror
+
+      - name: Run test suite
+        # Locale matters here: several tests read/write UTF-8 template
+        # and content fixtures, which fails under the default
+        # POSIX/C locale runners sometimes ship with.
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        run: cabal test sara-test --test-show-details=direct --flags=+werror
+
+  hlint:
+    name: hlint (advisory)
+    runs-on: ubuntu-latest
+    # Non-blocking for now: this codebase hasn't been through a
+    # dedicated hlint-driven cleanup pass yet (tracked separately from
+    # the correctness work CI otherwise gates on). Flip to blocking
+    # once that pass happens — an advisory check nobody looks at is
+    # worse than no check, so treat this as a TODO, not a fixture.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up hlint
+        uses: haskell-actions/hlint-setup@v2
+      - name: Run hlint
+        uses: haskell-actions/hlint-run@v2
+        with:
+          path: '["src/", "app/", "bench/", "test/"]'
+          fail-on: warning
+
+  fourmolu:
+    name: fourmolu (advisory, format check)
+    runs-on: ubuntu-latest
+    # Non-blocking for the same reason as hlint above: no fourmolu
+    # config has been agreed and the codebase has never been formatted
+    # against one. Make this blocking only after that deliberate pass.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GHC
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.8.4"
+      - name: Install fourmolu
+        run: cabal install fourmolu --overwrite-policy=always
+      - name: Check formatting
+        run: |
+          find src app bench test -name '*.hs' | xargs fourmolu --mode check
