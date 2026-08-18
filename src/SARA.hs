@@ -93,6 +93,11 @@ saraWithOptions mClients dryRun m = do
         , cfgDefaultTemplate = "templates/post.html"
         , cfgOutputDirectory = "_site"
         , cfgDryRun = dryRun
+        -- Raw HTML in markdown stays off by default even for this
+        -- hardcoded config (audit issue #1); a real project's
+        -- 'sara.yaml' would be the place to opt in, once
+        -- 'SARA.Config''s YAML loader grows a field for it.
+        , cfgAllowRawHtml = False
         }
   
   errorRef <- newIORef []
@@ -232,14 +237,18 @@ renderBuildIssueReport issues = do
       ]
     -- Preserves first-seen order, unlike 'Data.List.nub' composed with
     -- a 'Data.Set' (which would reorder), so files appear in the
-    -- report in the order their issues were actually found.
+    -- report in the order their issues were actually found. Membership
+    -- is checked against a 'HS.HashSet' alongside the output list
+    -- (rather than the growing output list itself via 'elem'), so a
+    -- build with many distinct failing files stays O(n) instead of
+    -- O(n^2).
     dedupOrdered :: [FilePath] -> [FilePath]
-    dedupOrdered = go []
+    dedupOrdered = go HS.empty
       where
         go _    []     = []
         go seen (x:xs)
-          | x `elem` seen = go seen xs
-          | otherwise     = x : go (x : seen) xs
+          | x `HS.member` seen = go seen xs
+          | otherwise          = x : go (HS.insert x seen) xs
     reportFile (path, errs) = do
       TIO.putStrLn $ "\n  " <> T.pack path
       mapM_ (\e -> TIO.putStrLn ("    " <> renderAnyErrorColor e)) errs

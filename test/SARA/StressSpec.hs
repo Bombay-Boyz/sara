@@ -42,7 +42,8 @@ spec = do
           createDirectoryIfMissing True "templates"
           TIO.writeFile "templates/post.html" "<html><head><title>Industrial Stress Test</title></head><body>{{{itemBody}}}</body></html>"
           sara $ do
-            void $ match (glob "posts/*.md") $ \file -> do
+            postsGlob <- glob "posts/*.md"
+            void $ match postsGlob $ \file -> do
               item <- readMarkdown file
               item' <- validateSEO item
               render "templates/post.html" item'

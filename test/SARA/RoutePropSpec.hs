@@ -9,7 +9,7 @@ import Test.Hspec
 import Test.QuickCheck
 import SARA.Routing.Types
 import SARA.Routing.Engine
-import SARA.Routing.Error (RoutingError(..))
+import SARA.Error (SaraError(..))
 
 -- | Generator for Abstract Routes
 instance Arbitrary (Route 'Abstract) where

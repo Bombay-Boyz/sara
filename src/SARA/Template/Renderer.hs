@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DataKinds #-}
 
 module SARA.Template.Renderer
   ( TemplateOracle(..)
@@ -15,14 +16,14 @@ import Development.Shake.Classes
 import GHC.Generics (Generic)
 import Control.Monad (void)
 import qualified Text.Mustache as Mustache
+import qualified Text.Mustache.Types as Mustache (mFromJSON)
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
-import SARA.Template.Error
+import System.FilePath (takeFileName)
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
-import SARA.Error (SaraBuildException(..))
+import SARA.Error (SaraError(..), SaraErrorKind(..), SaraBuildException(..))
 import Control.Exception (throwIO)
 
 newtype TemplateOracle = TemplateOracle FilePath
@@ -54,15 +55,14 @@ addTemplateOracle = void $ addOracle $ \(TemplateOracle path) -> do
 renderTemplate
   :: FilePath
   -> Aeson.Value
-  -> Action (Either TemplateError Text)
+  -> Action (Either (SaraError 'EKTemplate) Text)
 renderTemplate tplPath ctx = do
   -- This will trigger the oracle (audit)
   _ <- askOracle (TemplateOracle tplPath)
-  -- If we are here, audit passed.
-  -- stache has its own cache if we use the same tpl object, 
-  -- but here we are in a distributed/parallel build, 
-  -- so we compile in each rule (or we could use a better oracle).
-  -- For now, compile and render.
-  res <- liftIO $ Mustache.compileMustacheFile tplPath
-  let result = TL.toStrict $ Mustache.renderMustache res ctx
-  pure $ Right result
+  -- If we are here, audit passed. Mustache has no built-in cache we
+  -- can safely share here (we're in a distributed/parallel build), so
+  -- we compile fresh in each rule, same as before.
+  content <- liftIO $ TIO.readFile tplPath
+  pure $ case Mustache.compileTemplate (takeFileName tplPath) content of
+    Left err  -> Left $ TemplateRenderFailure tplPath (T.pack (show err))
+    Right tpl -> Right $ Mustache.substituteValue tpl (Mustache.mFromJSON ctx)

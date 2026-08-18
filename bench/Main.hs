@@ -47,12 +47,16 @@ main :: IO ()
 main = do
   root <- mkProjectRoot "."
   defaultMain
-    [ -- 'whnf', not 'nf': the 'SaraError'/'GlobPattern'/'SafePath'
-      -- results here have no 'NFData' instance (they're small,
-      -- already-strict, closed sum/newtype values), so forcing to weak
-      -- head normal form is what pins down the branch actually taken
-      -- (Left vs. Right) without requiring a deep-force instance that
-      -- doesn't exist and shouldn't be added just to satisfy a benchmark.
+    [ -- 'whnf', not 'nf': the 'SaraError'/'GlobPattern' results here
+      -- have no 'NFData' instance (they're small, already-strict,
+      -- closed sum/newtype values), so forcing to weak head normal
+      -- form is what pins down the branch actually taken (Left vs.
+      -- Right) without requiring a deep-force instance that doesn't
+      -- exist and shouldn't be added just to satisfy a benchmark.
+      -- 'guardPath' itself is 'IO'-returning (it canonicalizes the
+      -- candidate path to resolve symlinks before the containment
+      -- check — see 'SARA.Security.PathGuard'), so its benchmarks use
+      -- 'whnfIO' rather than 'whnf'.
       bgroup
         "Frontmatter.parseFrontmatter"
         [ bench "10 keys"   $ whnf (parseFrontmatter "bench.md") (mkFrontmatterDoc 10)
@@ -61,8 +65,8 @@ main = do
         ]
     , bgroup
         "PathGuard.guardPath"
-        [ bench "within root"       $ whnf (guardPath root) "./posts/a-post-with-a-fairly-long-slug.md"
-        , bench "traversal attempt" $ whnf (guardPath root) "./posts/../../etc/passwd"
+        [ bench "within root"       $ whnfIO (guardPath root "./posts/a-post-with-a-fairly-long-slug.md")
+        , bench "traversal attempt" $ whnfIO (guardPath root "./posts/../../etc/passwd")
         ]
     , bgroup
         "GlobGuard.mkGlobPattern"

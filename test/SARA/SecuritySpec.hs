@@ -16,12 +16,15 @@ import qualified Data.Text as T
 spec :: Spec
 spec = do
   describe "SARA.Security.PathGuard" $ do
-    it "rejects path traversal via .." $ 
-      guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/../etc" `shouldSatisfy` (\case Left _ -> True; _ -> False)
-    it "rejects absolute paths outside root" $ 
-      guardPath (ProjectRoot "/tmp/sara") "/etc/passwd" `shouldSatisfy` (\case Left _ -> True; _ -> False)
-    it "accepts paths within root" $ 
-      guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/file.md" `shouldSatisfy` (\case Right _ -> True; _ -> False)
+    it "rejects path traversal via .." $ do
+      result <- guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/../etc"
+      result `shouldSatisfy` (\case Left _ -> True; _ -> False)
+    it "rejects absolute paths outside root" $ do
+      result <- guardPath (ProjectRoot "/tmp/sara") "/etc/passwd"
+      result `shouldSatisfy` (\case Left _ -> True; _ -> False)
+    it "accepts paths within root" $ do
+      result <- guardPath (ProjectRoot "/tmp/sara") "/tmp/sara/file.md"
+      result `shouldSatisfy` (\case Right _ -> True; _ -> False)
 
   describe "SARA.Security.GlobGuard" $ do
     it "rejects patterns containing .." $ 
@@ -32,21 +35,24 @@ spec = do
       isRight (mkGlobPattern (T.pack "posts/*.md")) `shouldBe` True
 
   describe "SARA.Security.RegexGuard" $ do
-    it "accepts safe patterns" $
-      -- A plain, unquantified-group pattern has no nested quantifiers,
-      -- no alternation-in-repetition, and shallow nesting depth, so it
-      -- must compile and pass every heuristic in 'checkComplexity'.
+    it "accepts a plain, unambiguous pattern" $
       case mkSafeRegex (T.pack "^posts/[a-z0-9-]+\\.md$") of
         Right safe -> unSafeRegex safe `shouldBe` T.pack "^posts/[a-z0-9-]+\\.md$"
-        Left err   -> expectationFailure $ "Expected a safe pattern to be accepted: " ++ show err
+        Left err   -> expectationFailure $ "Expected a valid pattern to be accepted: " ++ show err
 
-    it "rejects nested quantifiers (classic ReDoS shape)" $
-      isLeft (mkSafeRegex (T.pack "(a+)+")) `shouldBe` True
+    it "accepts patterns that would be flagged as ReDoS-prone under a backtracking engine" $
+      -- 'regex-tdfa' is an automaton-based engine: matching runs in
+      -- time linear in input length for any pattern, so nested
+      -- quantifiers and alternation-in-repetition are ordinary,
+      -- entirely safe POSIX ERE here -- not something to reject. This
+      -- test exists specifically to pin that down: it would have
+      -- failed under the prior backtracking-engine backend, and that
+      -- difference is the point of the switch, not a regression.
+      case mkSafeRegex (T.pack "(a+)+") of
+        Right _  -> pure ()
+        Left err -> expectationFailure $ "Expected this pattern to compile under regex-tdfa: " ++ show err
 
-    it "rejects alternation inside unbounded repetition" $
-      isLeft (mkSafeRegex (T.pack "(a|ab)+")) `shouldBe` True
-
-    it "rejects patterns that fail to compile" $
+    it "rejects patterns that are not valid POSIX ERE syntax" $
       isLeft (mkSafeRegex (T.pack "(unclosed")) `shouldBe` True
 
   describe "SARA.Security.HtmlEscape" $ do

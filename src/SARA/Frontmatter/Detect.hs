@@ -7,6 +7,8 @@ module SARA.Frontmatter.Detect
 import Data.Text (Text)
 import qualified Data.Text as T
 import SARA.Error (SaraError(..), SaraErrorKind(..))
+import Control.Applicative (asum)
+import Data.Maybe (fromMaybe)
 
 data FrontmatterFormat
   = FmYAML
@@ -41,15 +43,24 @@ splitBy sepLF sepCRLF sepBase t =
       content = if T.strip firstLine == T.strip sepBase 
                 then T.drop 1 rest -- Drop the \n itself
                 else t
-      -- Find the closing separator on its own line
-      (fm, body) = case T.breakOn ("\n" <> sepLF) content of
-        (f, b) | not (T.null b) -> (f, T.drop (T.length sepLF + 1) b)
-        _ -> case T.breakOn ("\r\n" <> sepCRLF) content of
-               (f, b) | not (T.null b) -> (f, T.drop (T.length sepCRLF + 2) b)
-               _ -> case T.breakOn ("\n" <> sepBase) content of
-                      (f, b) | not (T.null b) -> (f, T.drop (T.length sepBase + 1) b)
-                      _ -> ("", content)
+      -- Find the closing separator on its own line: try the LF-style
+      -- separator, then the CRLF-style one, then the bare fallback, in
+      -- that order — the same three-way fallback the original nested
+      -- 'case' chain encoded, expressed as one helper tried three
+      -- times via 'asum' instead of copy-pasted per separator style.
+      (fm, body) = fromMaybe ("", content) $ asum
+        [ trySeparator "\n"   sepLF   content
+        , trySeparator "\r\n" sepCRLF content
+        , trySeparator "\n"   sepBase content
+        ]
   in Right (fm, body)
+  where
+    trySeparator :: Text -> Text -> Text -> Maybe (Text, Text)
+    trySeparator lineEnding sep c =
+      let needle = lineEnding <> sep
+      in case T.breakOn needle c of
+           (f, b) | not (T.null b) -> Just (f, T.drop (T.length needle) b)
+           _                       -> Nothing
 
 splitJSON :: Text -> Either (SaraError 'EKFrontmatter) (Text, Text)
 splitJSON t =

@@ -6,13 +6,13 @@ module SARA.Migration.Hugo
   ) where
 
 import SARA.Error (SaraError(..), SaraErrorKind(..))
+import SARA.FileSystem (listFilesRecursiveFrom)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (doesDirectoryExist, listDirectory, createDirectoryIfMissing)
+import System.Directory (doesDirectoryExist, createDirectoryIfMissing)
 import System.FilePath (takeExtension, (</>))
 import Control.Monad (forM)
-import qualified System.Directory as Dir
 
 -- | Translates common Hugo shortcodes to Markdown/SARA equivalents.
 --   Total, for the same reason as 'SARA.Migration.Jekyll.translateJekyllShortcodes':
@@ -138,18 +138,9 @@ migrateHugoContent sourceRoot destRoot = do
           Left err -> pure (Left (relPath, err))
       pure ([f | Right f <- results], [fe | Left fe <- results])
 
--- | All @.md@ file paths under 'dir', relative to 'dir', found by a
---   plain recursive walk (Hugo content trees are rarely more than a
---   few levels deep, so no need for anything more elaborate than
---   direct recursion here).
+-- | All @.md@ file paths under 'dir', relative to 'dir'. Filters
+--   'SARA.FileSystem.listFilesRecursiveFrom' (the same recursive-walk
+--   helper 'app/Main.hs' uses) rather than re-deriving the walk here.
 findMarkdownFilesRecursive :: FilePath -> FilePath -> IO [FilePath]
-findMarkdownFilesRecursive baseDir relSoFar = do
-  entries <- listDirectory (baseDir </> relSoFar)
-  fmap concat . forM entries $ \name -> do
-    let rel = if null relSoFar then name else relSoFar </> name
-    isDir <- Dir.doesDirectoryExist (baseDir </> rel)
-    if isDir
-      then findMarkdownFilesRecursive baseDir rel
-      else if takeExtension name == ".md"
-           then pure [rel]
-           else pure []
+findMarkdownFilesRecursive baseDir relSoFar =
+  filter ((== ".md") . takeExtension) <$> listFilesRecursiveFrom baseDir relSoFar

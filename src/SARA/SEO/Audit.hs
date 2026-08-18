@@ -50,12 +50,13 @@ checkHeadingHierarchy path tags =
                      , T.length digitsPart == 1
                      , Just h <- [readMaybe (T.unpack digitsPart) :: Maybe Int]
                      ]
-      go [] _ = []
-      go (h:hs) prev =
-        if h > prev + 1
-        then AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h) : go hs h
-        else go hs h
-  in go headings 0
+  -- Each heading is compared to the one immediately before it, seeded
+  -- with 0 — that's exactly 'zip (0 : headings) headings', so this is
+  -- a comprehension over adjacent pairs rather than explicit recursion.
+  in [ AnySaraError (SEOHeadingSkip path (SourcePos path 0 0) prev h)
+     | (prev, h) <- zip (0 : headings) headings
+     , h > prev + 1
+     ]
 
 -- | Internal check for title tag presence and quality.
 checkTitleTag :: FilePath -> [Tag Text] -> [AnySaraError]

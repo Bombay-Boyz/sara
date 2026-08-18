@@ -5,7 +5,7 @@ module SARA.RoutingSpec (spec) where
 import Test.Hspec
 import SARA.Routing.Engine
 import SARA.Routing.Types
-import SARA.Routing.Error
+import SARA.Error (SaraError(..))
 
 spec :: Spec
 spec = do
@@ -50,14 +50,16 @@ spec = do
         -- not an escaped backslash ('\\'), so it can't be interpolated
         -- at all. Before the 'eof' anchor fix, this would silently
         -- succeed with the trailing backslash dropped from the output.
-        case regexRoute "^(posts)/(.*)\\.md$" "\\1/\\2.html\\" of
+        let result = regexRoute "^(posts)/(.*)\\.md$" "\\1/\\2.html\\"
+        case result of
           Left _ -> expectationFailure "regexRoute itself should accept this pattern; the replacement is checked at resolveRoute time"
           Right route -> case resolveRoute route "posts/hello.md" of
             Left (RouteRegexInvalid _ _) -> pure ()
             other -> expectationFailure $ "Expected RouteRegexInvalid for a malformed replacement, got " ++ show other
 
       it "correctly interpolates a well-formed RegexRoute replacement (control case)" $ do
-        case regexRoute "^(posts)/(.*)\\.md$" "\\1/\\2.html" of
+        let result = regexRoute "^(posts)/(.*)\\.md$" "\\1/\\2.html"
+        case result of
           Left err -> expectationFailure $ "Expected a valid regex to be accepted, got " ++ show err
           Right route -> case resolveRoute route "posts/hello.md" of
             Right (ResolvedRoute p) -> p `shouldBe` "posts/hello.html"

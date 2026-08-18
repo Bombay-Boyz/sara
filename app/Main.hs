@@ -11,13 +11,14 @@ import SARA.Migration.Jekyll (migrateJekyllPosts)
 import SARA.Migration.Hugo (migrateHugoContent)
 import SARA.LiveReload.Server
 import SARA.LiveReload.Watcher
+import SARA.FileSystem (listFilesRecursiveFrom)
 import qualified Network.Wai.Handler.Warp as Warp
 import Control.Concurrent (forkIO, MVar)
-import Control.Monad (forM, forM_)
+import Control.Monad (forM_)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Aeson as Aeson
-import System.Directory (getCurrentDirectory, createDirectoryIfMissing, listDirectory, doesFileExist, doesDirectoryExist, findExecutable)
+import System.Directory (getCurrentDirectory, createDirectoryIfMissing, doesFileExist, findExecutable)
 import System.FilePath ((</>), takeExtension, makeRelative)
 import System.Environment (withArgs, getArgs, getEnvironment)
 import System.Process (proc, createProcess, waitForProcess, std_in, std_out, std_err, env, StdStream(..))
@@ -150,8 +151,10 @@ checkSaraLibraryVisible runghcPath =
 --   Now includes automated Search Indexing and Asset discovery.
 defaultSite :: SaraM ()
 defaultSite = do
-  discover (glob "assets/*")
-  allPosts <- match (glob "posts/*.md") $ \file -> do
+  assetsGlob <- glob "assets/*"
+  discover assetsGlob
+  postsGlob <- glob "posts/*.md"
+  allPosts <- match postsGlob $ \file -> do
     item <- readMarkdown file
     validateSEO item
 
@@ -183,7 +186,7 @@ runServe port = do
   -- Create site dir if it doesn't exist yet to avoid server error
   createDirectoryIfMissing True siteDir
   
-  _ <- forkIO $ Warp.run port (liveReloadApp clients siteDir)
+  _ <- forkIO $ Warp.run port (liveReloadApp port clients siteDir)
   watchProject curr $ do
     runDefaultBuild (Just clients) False
     broadcastPatches clients siteDir
@@ -224,14 +227,11 @@ broadcastPatches clients siteDir = do
       , "html" Aeson..= content
       ]
 
+-- | Full (not relative) paths, via the same recursive-walk helper
+--   'SARA.Migration.Hugo.findMarkdownFilesRecursive' uses — the two
+--   used to hand-roll the identical traversal independently.
 listFilesRecursive :: FilePath -> IO [FilePath]
-listFilesRecursive dir = do
-  names <- listDirectory dir
-  paths <- forM names $ \name -> do
-    let path = dir </> name
-    isDir <- doesDirectoryExist path
-    if isDir then listFilesRecursive path else return [path]
-  return (concat paths)
+listFilesRecursive dir = map (dir </>) <$> listFilesRecursiveFrom dir ""
 
 runImport :: FilePath -> IO ()
 runImport path = do

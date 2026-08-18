@@ -6,6 +6,7 @@ module SARA.Migration.Jekyll
   ) where
 
 import SARA.Error (SaraError(..), SaraErrorKind(..))
+import SARA.Migration.TagTranslate (translateBalanced, translateHighlightLike)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -35,35 +36,6 @@ translateJekyllShortcodes path content =
     >>= translateLink path
     >>= translateHighlight path
 
--- | Find the next @opener ... closer@ span, apply 'render' to the text
---   between them, and recurse on what follows — or fail with
---   'MigrationUnclosedTag' if 'opener' appears with no 'closer' before
---   the end of the text. Shared by every tag-style translator in this
---   module and 'SARA.Migration.Hugo' so "what counts as unclosed" is
---   defined exactly once, not re-derived (and potentially
---   re-mis-derived) per tag.
-translateBalanced
-  :: FilePath
-  -> Text                -- ^ opener, e.g. "{% highlight "
-  -> Text                -- ^ closer, e.g. " %}"
-  -> (Text -> Text)      -- ^ render the tag's inner content as its replacement
-  -> Text
-  -> Either (SaraError 'EKMigration) Text
-translateBalanced path opener closer render = go
-  where
-    go t =
-      let (before, match) = T.breakOn opener t
-      in if T.null match
-         then Right t  -- no (more) occurrences of this tag: done, unchanged
-         else
-           let rest = T.drop (T.length opener) match
-               (inner, after) = T.breakOn closer rest
-           in if T.null after
-              then Left $ MigrationUnclosedTag path opener closer
-              else do
-                restResult <- go (T.drop (T.length closer) after)
-                pure (before <> render inner <> restResult)
-
 -- {% post_url 2010-06-15-my-post %} -> [my-post](/posts/2010-06-15-my-post.html)
 translatePostUrl :: FilePath -> Text -> Either (SaraError 'EKMigration) Text
 translatePostUrl path = translateBalanced path "{% post_url " " %}" $ \slug ->
@@ -83,33 +55,12 @@ translateLink path = translateBalanced path "{% link " " %}" $ \p ->
 -- globally before even looking for "{% highlight ", so mismatched
 -- counts (an extra endhighlight, or a highlight with no matching end)
 -- were never detected — exactly the silent-partial-output class this
--- rewrite closes.
+-- rewrite closes. Uses 'translateHighlightLike' (shared with
+-- 'SARA.Migration.Hugo''s single-style case), rather than its own
+-- copy of the same three-delimiter scan.
 translateHighlight :: FilePath -> Text -> Either (SaraError 'EKMigration) Text
-translateHighlight path = go
-  where
-    go t =
-      let (before, match) = T.breakOn "{% highlight " t
-      in if T.null match
-         then
-           -- No opener left; a stray, unmatched "{% endhighlight %}"
-           -- with no preceding opener is itself a malformed-migration
-           -- condition, not something to silently pass through.
-           if "{% endhighlight %}" `T.isInfixOf` t
-           then Left $ MigrationUnclosedTag path "{% endhighlight %}" "{% highlight ... %}"
-           else Right t
-         else
-           let rest = T.drop (T.length "{% highlight ") match
-               (lang, afterOpen) = T.breakOn " %}" rest
-           in if T.null afterOpen
-              then Left $ MigrationUnclosedTag path "{% highlight " " %}"
-              else
-                let body = T.drop (T.length " %}") afterOpen
-                    (code, afterClose) = T.breakOn "{% endhighlight %}" body
-                in if T.null afterClose
-                   then Left $ MigrationUnclosedTag path "{% highlight ... %}" "{% endhighlight %}"
-                   else do
-                     restResult <- go (T.drop (T.length "{% endhighlight %}") afterClose)
-                     pure (before <> "```" <> T.strip lang <> code <> "```" <> restResult)
+translateHighlight path =
+  translateHighlightLike path "{% highlight " " %}" "{% endhighlight %}"
 
 -- | Migrates every post under @sourceRoot\/_posts@ into @destRoot\/posts@.
 --

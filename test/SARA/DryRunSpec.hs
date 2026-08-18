@@ -52,8 +52,9 @@ withOnePostProject action =
 
 runOnePostBuild :: Bool -> IO ()
 runOnePostBuild dryRun =
-  saraWithOptions Nothing dryRun $
-    void $ match (glob "posts/*.md") $ \file -> do
+  saraWithOptions Nothing dryRun $ do
+    postsGlob <- glob "posts/*.md"
+    void $ match postsGlob $ \file -> do
       item <- readMarkdown file
       item' <- validateSEO item
       render "templates/post.html" item'

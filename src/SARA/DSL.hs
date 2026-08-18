@@ -13,6 +13,7 @@ module SARA.DSL
   , validateSEO
   , render
   , renderWith
+  , renderSyntheticPage
   , remapMetadata
   , buildSearchIndex
   , buildSitemap
@@ -29,12 +30,14 @@ module SARA.DSL
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import SARA.Types (GlobPattern(..), Item, ItemP(..), ValidationState(..), Route(..), RouteState(..), FeedConfig(..))
-import SARA.Security.GlobGuard (unGlobPattern)
+import SARA.Types (Item, ItemP(..), ValidationState(..), Route(..), RouteState(..), FeedConfig(..))
+import SARA.Security.GlobGuard (GlobPattern, unGlobPattern, mkGlobPattern)
+import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Security.HtmlEscape (escapeHtml)
 import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..))
-import SARA.Error (SaraError(..), AnySaraError(..), SaraErrorKind(..), SourcePos(..))
+import SARA.Config (SaraConfig(..))
+import SARA.Error (SaraError(..), AnySaraError(..), SaraErrorKind(..), SourcePos(..), renderAnyErrorColor)
 import SARA.Routing.Engine (resolveRoute)
-import qualified SARA.Routing.Error as RE
 import qualified SARA.Routing.Engine as REngine
 import SARA.Frontmatter.Parser (parseFrontmatter)
 import SARA.Markdown.Parser (parseMarkdown)
@@ -44,16 +47,26 @@ import SARA.Markdown.Shortcode (Shortcode(..))
 import Development.Shake (liftIO)
 import Control.Monad.Writer (tell)
 import Control.Monad.Reader (ask)
-import Control.Monad.Except (throwError)
+import Control.Monad.Except (throwError, liftEither)
+import Data.Bifunctor (first)
 import Data.Aeson (KeyValue(..), object)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
-import qualified BLAKE3
+import qualified Crypto.Hash.SHA256 as SHA256
+import qualified Data.ByteString.Base16 as Base16
 import qualified Data.Yaml as Yaml
+import qualified Data.Text.IO as TIO
 import System.FilePath (takeExtension)
 import System.FilePath.Glob (globDir1, compile)
+
+-- | Hex-encoded SHA-256 of a byte string — see 'SARA.Internal.Hash's
+--   dependency-provenance note for why SHA-256 rather than the
+--   BLAKE3 this project's Hackage-only dependency graph made
+--   unreachable in this build environment.
+contentHash :: BS.ByteString -> Text
+contentHash = T.decodeUtf8 . Base16.encode . SHA256.hash
 
 -- | Match source files by glob and run logic for each.
 -- | Matches files against a glob pattern and applies the given
@@ -99,9 +112,25 @@ match
   -> (FilePath -> SaraM (Item 'Validated))
   -> SaraM [Item 'Validated]
 match g f = do
+  env <- ask
   let patStr = T.unpack (unGlobPattern g)
   files <- liftIO $ globDir1 (compile patStr) "."
-  mapM f files
+  -- Containment check runs here, immediately after the glob resolves
+  -- and before any matched file is handed to the caller's callback —
+  -- the same point 'SARA.Internal.Planner.genDiscover' already
+  -- enforces it for discovered assets (audit issue #3). A file that
+  -- fails the guard is skipped and reported, not silently dropped nor
+  -- allowed to sink the whole batch — consistent with how migration
+  -- functions elsewhere in this codebase already treat "one bad file
+  -- shouldn't fail everything."
+  accepted <- liftIO $ fmap concat (mapM (checkContained env) files)
+  mapM f accepted
+  where
+    checkContained env file = do
+      guarded <- guardPath (envRoot env) file
+      case guarded of
+        Left err -> [] <$ TIO.putStrLn (renderAnyErrorColor (AnySaraError err))
+        Right _  -> pure [file]
 
 -- | Auto-discover and copy/process assets.
 discover :: GlobPattern -> SaraM ()
@@ -111,9 +140,7 @@ discover = discoverAssets
 route :: Route 'Abstract -> Item 'Unvalidated -> Either (SaraError 'EKRouting) (Item 'Unvalidated)
 route r item = case resolveRoute r (itemPath item) of
   Right res -> Right item { itemRoute = res }
-  Left (RE.RouteRegexInvalid p d) -> Left $ RouteRegexInvalid p d
-  Left (RE.RouteConflict f1 f2 o) -> Left $ RouteConflict f1 f2 o
-  Left (RE.RouteUnsafeForWindows p reason) -> Left $ RouteUnsafeForWindows p reason
+  Left e    -> Left e
 
 -- | Read and parse a Markdown file, returning an unvalidated Item.
 readMarkdown :: FilePath -> SaraM (Item 'Unvalidated)
@@ -123,54 +150,59 @@ readMarkdown file = readMarkdownWith (\sc -> "{{% " <> scName sc <> " ... %}}") 
 readMarkdownWith :: (Shortcode -> Text) -> FilePath -> SaraM (Item 'Unvalidated)
 readMarkdownWith customHandler file = do
   env <- ask
+  -- Containment check before any read — defense in depth alongside
+  -- 'match's own guard (issue #3), since 'readMarkdownWith' is public
+  -- API a caller can invoke directly, bypassing 'match' entirely.
+  guarded <- liftIO $ guardPath (envRoot env) file
+  _safePath <- liftEither $ first ((:[]) . AnySaraError) guarded
   content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
-  case parseFrontmatter file content of
-    Right (meta, body) -> do
-      let rules = envRemapRules env
-      case Remap.remapMetadata rules file meta of
-        Left err -> throwError [AnySaraError err]
-        Right remappedMeta -> do
-          -- 2. Expand shortcodes with industrial image support
-          let handler sc = case scName sc of
-                "image" -> 
-                  let src = Map.findWithDefault "" "src" (scArgs sc)
-                      alt = Map.findWithDefault "" "alt" (scArgs sc)
-                      -- Inject a magic token that genRender will replace with real LQIP
-                      token = "__LQIP__:" <> src <> "__"
-                  in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
-                _ -> customHandler sc
+  (meta, body) <- liftEither $ first (:[]) $ first AnySaraError (parseFrontmatter file content)
+  let rules = envRemapRules env
+  remappedMeta <- liftEither $ first (:[]) $ first AnySaraError (Remap.remapMetadata rules file meta)
+  -- 2. Expand shortcodes with industrial image support
+  let handler sc = case scName sc of
+        "image" -> 
+          let src = escapeHtml (Map.findWithDefault "" "src" (scArgs sc))
+              alt = escapeHtml (Map.findWithDefault "" "alt" (scArgs sc))
+              -- Inject a magic token that genRender will replace with real LQIP
+              token = "__LQIP__:" <> src <> "__"
+          in "<picture class=\"lqip\" style=\"background-image: url(" <> token <> ")\"><img src=\"" <> src <> "\" alt=\"" <> alt <> "\" loading=\"lazy\"></picture>"
+        _ -> customHandler sc
 
-          let htmlBody = parseMarkdown handler file body
-          -- Default output route: extension rewritten to .html via
-          -- 'SlugRoute', the same default every mainstream SSG uses.
-          -- Previously this was 'ResolvedRoute file' — the source path
-          -- verbatim, extension and all — so a build produced
-          -- '_site/posts/hello.md' containing rendered HTML under a
-          -- '.md' name unless the caller remembered to call 'route'
-          -- explicitly.
-          --
-          -- 'resolveRoute' can now genuinely fail even for 'SlugRoute'
-          -- — not structurally, but because 'SARA.Routing.Engine' also
-          -- validates the resolved path is safe to write on Windows
-          -- (a character or reserved name forbidden there). That's a
-          -- real, reachable error a caller needs to see and fix, not
-          -- something to paper over with a silent fallback to the
-          -- verbatim path — a fallback here would defeat the entire
-          -- point of checking in the first place, for the single most
-          -- common code path (every plain 'readMarkdown' call).
-          case REngine.resolveRoute SlugRoute file of
-            Right resolvedRoute ->
-              return $ Item
-                { itemPath = file
-                , itemRoute = resolvedRoute
-                , itemMeta = remappedMeta
-                , itemBody = htmlBody
-                , itemHash = BLAKE3.hash Nothing [T.encodeUtf8 content]
-                }
-            Left (RE.RouteRegexInvalid p d) -> throwError [AnySaraError (RouteRegexInvalid p d)]
-            Left (RE.RouteConflict f1 f2 o) -> throwError [AnySaraError (RouteConflict f1 f2 o)]
-            Left (RE.RouteUnsafeForWindows p reason) -> throwError [AnySaraError (RouteUnsafeForWindows p reason)]
-    Left err -> throwError [AnySaraError err]
+  let htmlBody = parseMarkdown (cfgAllowRawHtml (envConfig env)) handler file body
+  -- Default output route: extension rewritten to .html via
+  -- 'SlugRoute', the same default every mainstream SSG uses.
+  -- Previously this was 'ResolvedRoute file' — the source path
+  -- verbatim, extension and all — so a build produced
+  -- '_site/posts/hello.md' containing rendered HTML under a
+  -- '.md' name unless the caller remembered to call 'route'
+  -- explicitly.
+  --
+  -- 'resolveRoute' can now genuinely fail even for 'SlugRoute'
+  -- — not structurally, but because 'SARA.Routing.Engine' also
+  -- validates the resolved path is safe to write on Windows
+  -- (a character or reserved name forbidden there). That's a
+  -- real, reachable error a caller needs to see and fix, not
+  -- something to paper over with a silent fallback to the
+  -- verbatim path — a fallback here would defeat the entire
+  -- point of checking in the first place, for the single most
+  -- common code path (every plain 'readMarkdown' call).
+  --
+  -- These three steps (frontmatter parse, metadata remap, route
+  -- resolution) used to be a three-deep nested 'case ... of Left ->
+  -- throwError; Right -> case ... of ...' pyramid. 'SaraM' already
+  -- derives 'MonadError [AnySaraError]' (see 'SARA.Monad'), so
+  -- 'liftEither' short-circuits on the first 'Left' exactly the way
+  -- that pyramid did, without hand-nesting each step inside the last.
+  resolvedRoute <- liftEither $
+    first ((:[]) . AnySaraError) (REngine.resolveRoute SlugRoute file)
+  return $ Item
+    { itemPath = file
+    , itemRoute = resolvedRoute
+    , itemMeta = remappedMeta
+    , itemBody = htmlBody
+    , itemHash = contentHash (T.encodeUtf8 content)
+    }
 
 -- | Read markdown content, decoding its frontmatter into a caller-chosen
 --   typed schema rather than a raw JSON object.
@@ -248,6 +280,41 @@ renderWith renderer item = do
                   ResolvedRoute p -> p
   tell [RuleRenderRaw (renderer item) item outPath]
 
+-- | Synthesizes and renders a page that has no source file of its
+--   own — a taxonomy listing, a pagination page, or anything else
+--   built entirely from already-validated content rather than read
+--   from disk. Previously, 'SARA.Content.Taxonomy.renderTermPage' and
+--   'SARA.Content.Pagination.renderPage' each independently built the
+--   same "resolve a literal output route, construct a synthetic
+--   'Item', render it" sequence; this is that sequence, factored
+--   once.
+--
+--   The synthetic item's 'itemPath' is the *template* path, not a
+--   real source file: a synthetic page has no markdown file of its
+--   own, so it's attributed to the template that generates it, which
+--   is a real file the build already depends on and hashes.
+renderSyntheticPage
+  :: FilePath          -- ^ template to render with
+  -> FilePath          -- ^ literal output path, e.g. "tags/haskell/index.html"
+  -> Aeson.Object       -- ^ page-specific metadata
+  -> BS.ByteString      -- ^ hash seed — only needs to distinguish this
+                        --   page from other synthetic pages sharing
+                        --   the same template, since there's no real
+                        --   source content underneath it to hash
+  -> SaraM (Item 'Validated)
+renderSyntheticPage template outPath meta hashSeed = do
+  resolvedRoute <- liftEither $
+    first ((:[]) . AnySaraError) (resolveRoute (LiteralRoute outPath) "")
+  let syntheticItem = Item
+        { itemPath  = template
+        , itemRoute = resolvedRoute
+        , itemMeta  = meta
+        , itemBody  = ""
+        , itemHash  = contentHash hashSeed
+        }
+  render template syntheticItem
+  pure syntheticItem
+
 -- | Register metadata remapping rules.
 remapMetadata :: [(Text, Text)] -> SaraM ()
 remapMetadata rules = tell [RuleRemap rules]
@@ -294,6 +361,16 @@ regexRoute pat repl = case REngine.regexRoute pat repl of
   Right r -> return r
   Left err -> throwError [AnySaraError err]
 
--- | Convenience helper for glob patterns.
-glob :: Text -> GlobPattern
-glob = GlobPattern
+-- | Convenience helper for glob patterns. Runs the glob text through
+--   'mkGlobPattern' and surfaces failure through 'SaraM's own error
+--   channel — the same pattern 'regexRoute' already uses for the
+--   equivalent 'SafeRegex' case. Previously this was
+--   @glob = GlobPattern@, a direct, unchecked application of the raw
+--   constructor that bypassed 'mkGlobPattern' — the smart constructor
+--   that rejects @..@ and absolute paths — entirely (audit issue #2).
+--   Since @glob@ is the function every @site.hs@ actually calls
+--   (@discover =<< glob "assets/*"@, @match =<< glob "posts/*.md"@),
+--   this was the one call site that made every other layer of the
+--   glob-containment guard moot in practice.
+glob :: Text -> SaraM GlobPattern
+glob pat = liftEither $ first ((:[]) . AnySaraError) (mkGlobPattern pat)

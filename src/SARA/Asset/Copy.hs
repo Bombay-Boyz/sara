@@ -12,4 +12,4 @@ copyAsset
   :: SafePath -- ^ Source
   -> SafePath -- ^ Destination
   -> Action ()
-copyAsset (SafePath src) (SafePath dst) = copyFile' src dst
+copyAsset src dst = copyFile' (unSafePath src) (unSafePath dst)

@@ -71,8 +71,11 @@ data SaraError (k :: SaraErrorKind) where
   RouteConflict
     :: { rtFile1 :: !FilePath, rtFile2 :: !FilePath, rtOutput :: !FilePath }
     -> SaraError 'EKRouting
-  -- | Mirrors 'SARA.Routing.Error.RouteUnsafeForWindows' — see that
-  --   constructor's Haddock for why this check exists.
+  -- | Constructed directly by 'SARA.Routing.Engine.validatePortable' —
+  --   see that function's Haddock for why this check exists. (Used to
+  --   be a separate 'SARA.Routing.Error.RouteUnsafeForWindows',
+  --   converted to this constructor after the fact at every call
+  --   site; 'SARA.Routing.Engine' now constructs this directly.)
   RouteUnsafeForWindows
     :: { rtPath :: !FilePath, rtWinReason :: !Text }
     -> SaraError 'EKRouting
@@ -159,6 +162,16 @@ data SaraError (k :: SaraErrorKind) where
     -> SaraError 'EKSecurity
   SecurityRegexReDoS
     :: { secPattern :: !Text, secReason :: !Text }
+    -> SaraError 'EKSecurity
+  -- | A pattern 'SARA.Security.RegexGuard.mkSafeRegex' rejected for
+  --   failing to compile at all — invalid POSIX ERE syntax, not a
+  --   ReDoS concern (which 'regex-tdfa's automaton-based matching
+  --   makes structurally impossible; see
+  --   'SARA.Internal.RegexCompat's Haddock). Kept distinct from
+  --   'SecurityRegexReDoS' so this error's own rendered message stays
+  --   accurate about what's actually wrong with the pattern.
+  SecurityRegexInvalid
+    :: { secInvalidPattern :: !Text, secInvalidReason :: !Text }
     -> SaraError 'EKSecurity
   SecurityShellInjection
     :: { secPath :: !FilePath, secReason :: !Text }
@@ -269,6 +282,7 @@ errorDetails = \case
   SecurityPathTraversal _ att root -> ("security", "S001", "Path traversal attempt: " <> T.pack att <> " escapes " <> T.pack root, Nothing)
   SecurityGlobEscape g r -> ("security", "S002", "Invalid or escaping glob pattern '" <> g <> "': " <> r, Nothing)
   SecurityRegexReDoS p r -> ("security", "S003", "ReDoS-prone regex pattern '" <> p <> "': " <> r, Nothing)
+  SecurityRegexInvalid p r -> ("security", "S003b", "Regex pattern '" <> p <> "' failed to compile: " <> r, Nothing)
   SecurityShellInjection p r -> ("security", "S004", "Shell injection risk in path " <> T.pack p <> ": " <> r, Nothing)
   SecurityUnsafeTemplate t ln -> ("security", "S005", "Unsafe template " <> T.pack t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))
   SecurityPathInvalidByte p r -> ("security", "S006", "Invalid path '" <> T.pack p <> "': " <> r, Nothing)

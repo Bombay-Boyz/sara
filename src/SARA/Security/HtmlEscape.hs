@@ -1,5 +1,6 @@
 module SARA.Security.HtmlEscape
   ( SafeHtml(..)
+  , escapeHtml
   , escapeHtmlValue
   , auditTemplateForRawInterpolation
   , saraManagedPrefix

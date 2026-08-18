@@ -27,6 +27,7 @@ import SARA.Asset.Image (processImage)
 import SARA.Search.Index (generatePartialIndex, mergePartialIndexes, mkSearchEntry)
 import SARA.SEO.Sitemap (generateSitemap)
 import SARA.SEO.Feed (generateRSS)
+import Data.Maybe (mapMaybe)
 
 import Control.Monad (forM_)
 import Control.Exception (throwIO)
@@ -47,27 +48,29 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
 
 collectOutputs :: SaraEnv -> [RuleDecl] -> [FilePath]
-collectOutputs env decls =
-  let outDir = cfgOutputDirectory (envConfig env)
-      -- Normalised so a path carrying a literal "./" segment (as
-      -- 'glob'-matched paths do, e.g. "./posts/x.md") produces the
-      -- same site-graph key an absolute-href lookup in
-      -- 'SARA.Validator.LinkChecker' resolves to — both sides must
-      -- agree on one canonical form, not just "however '</>' happened
-      -- to concatenate them."
-      mkOutput p = normalise (outDir </> p)
-      go = \case
-        [] -> []
-        (RuleRender _ _ outPath : xs) -> mkOutput outPath : go xs
-        (RuleRenderRaw _ _ outPath : xs) -> mkOutput outPath : go xs
-        (RuleDiscover _ : xs) -> go xs
-        (RuleRemap _ : xs) -> go xs
-        (RuleSearch outPath _ : xs) -> mkOutput outPath : go xs
-        (RulePartialSearch outPath _ : xs) -> normalise (outDir </> ".cache" </> outPath) : go xs
-        (RuleSitemap outPath _ : xs) -> mkOutput outPath : go xs
-        (RuleRSS outPath _ _ : xs) -> mkOutput outPath : go xs
-        (RuleGlobal _ : xs) -> go xs
-  in go decls
+collectOutputs env decls = mapMaybe declOutput decls
+  where
+    outDir = cfgOutputDirectory (envConfig env)
+    -- Normalised so a path carrying a literal "./" segment (as
+    -- 'glob'-matched paths do, e.g. "./posts/x.md") produces the
+    -- same site-graph key an absolute-href lookup in
+    -- 'SARA.Validator.LinkChecker' resolves to — both sides must
+    -- agree on one canonical form, not just "however '</>' happened
+    -- to concatenate them."
+    mkOutput p = normalise (outDir </> p)
+    -- Each 'RuleDecl' independently maps to zero or one output paths —
+    -- no state threads between elements — so this is 'mapMaybe' over a
+    -- per-constructor decision rather than hand-written recursion.
+    declOutput = \case
+      RuleRender _ _ outPath       -> Just (mkOutput outPath)
+      RuleRenderRaw _ _ outPath    -> Just (mkOutput outPath)
+      RuleDiscover _               -> Nothing
+      RuleRemap _                  -> Nothing
+      RuleSearch outPath _         -> Just (mkOutput outPath)
+      RulePartialSearch outPath _  -> Just (normalise (outDir </> ".cache" </> outPath))
+      RuleSitemap outPath _        -> Just (mkOutput outPath)
+      RuleRSS outPath _ _          -> Just (mkOutput outPath)
+      RuleGlobal _                 -> Nothing
 
 -- | Translate RuleDecls from DSL into Shake Rules.
 planRules :: SaraEnv -> [RuleDecl] -> Rules ()
@@ -175,7 +178,8 @@ genDiscover env g = do
   files <- liftIO $ globDir1 (compile patStr) "."
   let outDir = cfgOutputDirectory (envConfig env)
   forM_ files $ \src -> do
-    case guardPath (envRoot env) src of
+    guarded <- liftIO $ guardPath (envRoot env) src
+    case guarded of
       Left err -> liftIO $ TIO.putStrLn (renderAnyErrorColor (AnySaraError err))
       Right safeSrc -> do
         let out = outDir </> src
@@ -219,10 +223,12 @@ genRender env tplPath item outPath = do
     liftIO $ do
       putStr $ "\r\ESC[2K  [RENDERING] " ++ outPath
       hFlush stdout
-    case guardPath (envRoot env) (itemPath item) of
+    guardedSrc <- liftIO $ guardPath (envRoot env) (itemPath item)
+    case guardedSrc of
       Left err -> liftIO $ throwIO (SaraBuildException (renderAnyErrorColor (AnySaraError err)))
       Right safeSrc -> do
-        case guardPath (envRoot env) tplPath of
+        guardedTpl <- liftIO $ guardPath (envRoot env) tplPath
+        case guardedTpl of
           Left err -> liftIO $ throwIO (SaraBuildException (renderAnyErrorColor (AnySaraError err)))
           Right safeTpl -> do
             needBlake3 [unSafePath safeSrc, unSafePath safeTpl]

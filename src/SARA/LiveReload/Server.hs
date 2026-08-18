@@ -21,6 +21,7 @@ import Network.Wai.Middleware.Static (staticPolicy, addBase)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
@@ -28,6 +29,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as Map
 import Network.Socket (SockAddr(..))
 import Data.Unique (newUnique, hashUnique)
+import Data.List (isPrefixOf)
 
 data ManagedClient = ManagedClient
   { mcConn :: !WS.Connection
@@ -81,18 +83,55 @@ broadcastReload :: MVar ClientList -> IO ()
 broadcastReload mvar = broadcastMessage mvar (Aeson.object ["type" Aeson..= ("reload" :: Text)])
 
 -- | Wai application that serves static files and handles WebSockets.
-liveReloadApp :: MVar ClientList -> FilePath -> Application
-liveReloadApp clientsMVar siteDir req respond =
+--   The @port@ is the one the whole dev server is bound to — needed
+--   here only to recognise @http(s)://localhost:\<port\>@ and
+--   @http(s)://127.0.0.1:\<port\>@ as legitimate origins for the
+--   @/live@ upgrade below.
+liveReloadApp :: Int -> MVar ClientList -> FilePath -> Application
+liveReloadApp port clientsMVar siteDir req respond =
   case pathInfo req of
     ["sara"] -> 
       if isLoopback (remoteHost req)
       then respond $ responseLBS status200 [("Content-Type", "text/html")] (BSL.fromStrict $ TE.encodeUtf8 dashboardHtml)
       else respond $ responseLBS status403 [("Content-Type", "text/plain")] "Access denied: Localhost only"
     _ -> WaiWS.websocketsOr WS.defaultConnectionOptions 
-          (\pending -> if WS.requestPath (WS.pendingRequest pending) == "/live"
-                       then wsApp clientsMVar pending
-                       else WS.rejectRequest pending "Not a live reload path") 
+          (\pending ->
+              let headers = WS.requestHeaders (WS.pendingRequest pending)
+              in if WS.requestPath (WS.pendingRequest pending) /= "/live"
+                 then WS.rejectRequest pending "Not a live reload path"
+                 else if originAllowed port (lookup "Origin" headers)
+                      then wsApp clientsMVar pending
+                      else WS.rejectRequest pending "Origin not allowed")
           (staticApp siteDir) req respond
+
+-- | Cross-site WebSocket hijacking guard (audit issue #12): browsers
+--   do not enforce same-origin restrictions on WebSocket connections
+--   the way they do 'fetch'\/XHR, so — unlike the @\/sara@ dashboard
+--   route, which is correctly loopback-gated via 'isLoopback' — the
+--   @\/live@ endpoint needs its own check, on the 'Origin' header
+--   sent with the upgrade request. Any page open in a browser on the
+--   same machine, including one from an untrusted site in another
+--   tab, can otherwise open this socket and receive the same
+--   broadcasts ('broadcastMessage') a legitimate dev-tooling client
+--   would.
+--
+--   Allows: no 'Origin' header at all (a @file:@-opened page sends
+--   none, and this is dev-only tooling, not a production-facing
+--   endpoint), or an 'Origin' naming @localhost@\/@127.0.0.1@\/@::1@
+--   on the dev server's own port — matching the loopback-only intent
+--   the HTTP dashboard route already expresses via 'isLoopback'.
+--   Anything else is rejected.
+originAllowed :: Int -> Maybe BC.ByteString -> Bool
+originAllowed _    Nothing       = True
+originAllowed port (Just origin) =
+  any (`isPrefixOf` originStr) allowedPrefixes
+  where
+    originStr = BC.unpack origin
+    allowedPrefixes =
+      [ p <> h <> ":" <> show port
+      | p <- ["http://", "https://"]
+      , h <- ["localhost", "127.0.0.1", "[::1]"]
+      ]
 
 isLoopback :: SockAddr -> Bool
 isLoopback (SockAddrInet _ host) = host == 0x0100007f -- 127.0.0.1

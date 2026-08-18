@@ -10,8 +10,6 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
-import Data.ByteString (ByteString)
-import qualified BLAKE3
 
 mkItem :: FilePath -> Aeson.Object -> ItemP 'Validated Aeson.Object
 mkItem path meta = Item
@@ -19,7 +17,7 @@ mkItem path meta = Item
   , itemRoute = ResolvedRoute (path ++ ".html")
   , itemMeta  = meta
   , itemBody  = "body"
-  , itemHash  = BLAKE3.hash Nothing ([] :: [ByteString])
+  , itemHash  = "0000000000000000000000000000000000000000000000000000000000000000"
   }
 
 spec :: Spec

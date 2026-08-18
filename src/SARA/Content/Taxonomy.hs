@@ -25,12 +25,10 @@ module SARA.Content.Taxonomy
   , buildTaxonomyPages
   ) where
 
-import SARA.Types (ItemP(..), Route(..), ValidationState(..))
+import SARA.Types (ItemP(..), ValidationState(..))
 import SARA.Monad (SaraM)
-import SARA.DSL (render)
+import SARA.DSL (renderSyntheticPage)
 import SARA.Error (SaraError(..), AnySaraError(..))
-import SARA.Routing.Engine (resolveRoute)
-import qualified SARA.Routing.Error as RE
 import SARA.Content.Summary (itemToSummary)
 import Control.Monad.Except (throwError)
 import qualified Data.Aeson as Aeson
@@ -45,7 +43,6 @@ import qualified Data.Text.Encoding as TE
 import Data.Char (isAlphaNum, toLower)
 import Data.List (foldl')
 import System.FilePath ((</>))
-import qualified BLAKE3
 
 -- | Lowercased, non-alphanumeric runs collapsed to a single hyphen,
 --   leading\/trailing hyphens trimmed. Total for any input, including
@@ -134,32 +131,11 @@ renderTermPage
   -> Text
   -> [ItemP 'Validated Aeson.Object]
   -> SaraM (ItemP 'Validated Aeson.Object)
-renderTermPage template outDirBase term termItems = do
-  let outPath = outDirBase </> T.unpack (slugify term) </> "index.html"
-  case resolveRoute (LiteralRoute outPath) "" of
-    Left err -> throwError [routingErrorToSaraError err]
-    Right resolvedRoute -> do
-      let meta = KM.fromList
-            [ (K.fromText "term", Aeson.String term)
-            , (K.fromText "posts", Aeson.Array (V.fromList (map (itemToSummary 200) termItems)))
-            ]
-      let syntheticItem = Item
-            { itemPath  = template  -- see module Haddock: a synthetic
-                                     -- page has no source markdown file
-                                     -- of its own, so it's attributed to
-                                     -- the template that generates it,
-                                     -- which is a real file the build
-                                     -- already depends on and hashes.
-            , itemRoute = resolvedRoute
-            , itemMeta  = meta
-            , itemBody  = ""
-            , itemHash  = BLAKE3.hash Nothing [TE.encodeUtf8 term]
-            }
-      render template syntheticItem
-      pure syntheticItem
-
-routingErrorToSaraError :: RE.RoutingError -> AnySaraError
-routingErrorToSaraError = \case
-  RE.RouteRegexInvalid p d -> AnySaraError (RouteRegexInvalid p d)
-  RE.RouteConflict f1 f2 o -> AnySaraError (RouteConflict f1 f2 o)
-  RE.RouteUnsafeForWindows p r -> AnySaraError (RouteUnsafeForWindows p r)
+renderTermPage template outDirBase term termItems =
+  renderSyntheticPage template outPath meta (TE.encodeUtf8 term)
+  where
+    outPath = outDirBase </> T.unpack (slugify term) </> "index.html"
+    meta = KM.fromList
+      [ (K.fromText "term", Aeson.String term)
+      , (K.fromText "posts", Aeson.Array (V.fromList (map (itemToSummary 200) termItems)))
+      ]

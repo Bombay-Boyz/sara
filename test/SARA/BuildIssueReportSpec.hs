@@ -70,8 +70,9 @@ withBrokenLinkProject action =
 
 runTwoPostBuild :: IO ()
 runTwoPostBuild =
-  sara $
-    void $ match (glob "posts/*.md") $ \file -> do
+  sara $ do
+    postsGlob <- glob "posts/*.md"
+    void $ match postsGlob $ \file -> do
       item <- readMarkdown file
       item' <- validateSEO item
       render "templates/post.html" item'

@@ -26,10 +26,12 @@ module SARA.TemplateStandardSpec (spec) where
 import Test.Hspec
 import qualified Data.Text as T
 import Data.Text (Text)
-import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import qualified Data.Aeson as Aeson
-import Text.Mustache (compileMustacheFile, renderMustache)
+import Text.Mustache (compileTemplate)
+import qualified Text.Mustache as Mustache
+import qualified Text.Mustache.Types as Mustache (mFromJSON)
+import System.FilePath (takeFileName)
 
 import SARA.Security.HtmlEscape (auditTemplateForRawInterpolation)
 
@@ -89,8 +91,10 @@ emptyIndexContext =
 
 render :: FilePath -> Aeson.Value -> IO Text
 render path ctx = do
-  tpl <- compileMustacheFile path
-  pure . TL.toStrict $ renderMustache tpl ctx
+  content <- TIO.readFile path
+  case compileTemplate (takeFileName path) content of
+    Left err  -> fail (show err)
+    Right tpl -> pure (Mustache.substituteValue tpl (Mustache.mFromJSON ctx))
 
 countOccurrences :: Text -> Text -> Int
 countOccurrences needle haystack = length (T.breakOnAll needle haystack) 

@@ -1,1 +1,13 @@
 packages: .
+
+-- Regex support (SARA.Security.RegexGuard, SARA.Routing.Engine) is
+-- provided by "regex-tdfa", a pure-Haskell automaton-based regex
+-- engine -- no C library of any kind, so no system libpcre/libpcre2,
+-- no pkg-config entry, and no distro-specific package name to chase,
+-- ever. This project previously depended on regex-pcre (system
+-- libpcre/PCRE1, which current Debian no longer packages at all) and
+-- briefly on pcre2 (bundled PCRE2 C sources, still a backtracking
+-- engine); see BUILD_AND_FIXES_SUMMARY.md for the full history and
+-- why regex-tdfa is where this settled. This file is intentionally
+-- just "packages: ." now; no flag overrides or repository
+-- restrictions are needed for a normal `cabal build`.

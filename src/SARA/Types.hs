@@ -14,8 +14,8 @@ module SARA.Types
   , AssetKind(..)
   , ImageSpec(..)
   , ImageFormat(..)
-  , GlobPattern(..)
-  , SafeRegex(..)
+  , GlobPattern       -- re-exported opaque; constructor lives in SARA.Security.GlobGuard (issue #2)
+  , SafeRegex         -- re-exported opaque; constructor lives in SARA.Security.RegexGuard (issue #2)
   , SomeAssetKind(..)
   , FeedConfig(..)
   ) where
@@ -23,7 +23,8 @@ module SARA.Types
 import Data.Text (Text)
 import qualified Data.Aeson as Aeson
 import GHC.Generics (Generic)
-import qualified BLAKE3
+import SARA.Security.GlobGuard (GlobPattern)
+import SARA.Security.RegexGuard (SafeRegex)
 
 -- | 'v' is a phantom type: 'Unvalidated or 'Validated.
 data ValidationState = Unvalidated | Validated
@@ -58,7 +59,7 @@ data ItemP (v :: ValidationState) meta = Item
   , itemRoute    :: !(Route 'Resolved)
   , itemMeta     :: !meta
   , itemBody     :: !Text
-  , itemHash     :: !(BLAKE3.Digest 256)
+  , itemHash     :: !Text
   }
 
 -- | The default, schema-less item: metadata as a raw JSON object,
@@ -69,8 +70,6 @@ type Item v = ItemP v Aeson.Object
 
 data RouteState = Abstract | Resolved
 
--- | Placeholder for SafeRegex until SARA.Security.RegexGuard is implemented
-newtype SafeRegex = SafeRegex Text deriving (Eq, Show)
 
 -- | A route is either a pattern (abstract) or a concrete output path (resolved).
 data Route (s :: RouteState) where
@@ -128,10 +127,6 @@ data SomeAssetKind where
   SomeAssetKind :: AssetKind a -> SomeAssetKind
 
 deriving instance Show SomeAssetKind
-
--- | Opaque newtype for validated glob patterns.
-newtype GlobPattern = GlobPattern Text
-  deriving (Eq, Show)
 
 -- | Configuration for RSS/Atom feeds.
 data FeedConfig = FeedConfig

@@ -56,10 +56,22 @@ renderQualitySeal qs = do
     annotate (color Cyan) (pretty ("└" <> T.replicate 38 "─" <> "┘" :: Text)) <> hardline
   where
     renderLine label val clr =
-      let padding = 20 - T.length label
+      -- Clamped with 'max 0': for a large site (e.g. 'qsItemCount' in
+      -- the thousands), 'val' can exceed the box's fixed 18-character
+      -- field width, and 'T.replicate' on a negative count silently
+      -- produces "" rather than erroring — so, unclamped, the box's
+      -- right-hand border simply drifts out of alignment for large
+      -- values instead of the report gracefully degrading (audit
+      -- issue #14). This keeps the drawing well-formed; it doesn't
+      -- widen the column, so a very long value can still overflow the
+      -- box visually — a real fix would size the column from the
+      -- longest value actually being rendered, which is out of scope
+      -- for this cosmetic-only issue.
+      let padding = max 0 (20 - T.length label)
+          valPadding = max 0 (18 - T.length val)
       in annotate (color Cyan) (pretty ("│" :: Text)) <+> pretty label <> pretty (T.replicate padding " ") <> 
          annotate (bold <> color clr) (pretty val) <> 
-         pretty (T.replicate (18 - T.length val) " ") <+> annotate (color Cyan) (pretty ("│" :: Text)) <> hardline
+         pretty (T.replicate valPadding " ") <+> annotate (color Cyan) (pretty ("│" :: Text)) <> hardline
     
     scoreColor s | s >= 90   = Green
                  | s >= 50   = Yellow

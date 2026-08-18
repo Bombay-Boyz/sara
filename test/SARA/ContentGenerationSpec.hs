@@ -44,8 +44,9 @@ withTwoPostProject action =
 runContentPipeline :: IO ()
 runContentPipeline =
   sara $ do
-    discover (glob "assets/*")
-    posts <- match (glob "posts/*.md") $ \file -> do
+    discover =<< glob "assets/*"
+    postsGlob <- glob "posts/*.md"
+    posts <- match postsGlob $ \file -> do
       item <- readMarkdown file
       item' <- validateSEO item
       render "templates/post.html" item'

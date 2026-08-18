@@ -6,9 +6,8 @@ module SARA.SEO.OpenGraph
   ) where
 
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
 import Data.Text (Text)
+import SARA.Internal.Aeson (lookupText)
 
 -- | Generates OpenGraph meta tags from item metadata.
 generateOGTags
@@ -37,8 +36,3 @@ generateTwitterTags meta =
      , maybe [] (\d -> [("twitter:description", d)]) desc
      , [("twitter:card", "summary_large_image")]
      ]
-
-lookupText :: Text -> Aeson.Object -> Maybe Text
-lookupText key obj = case KM.lookup (K.fromText key) obj of
-  Just (Aeson.String t) -> Just t
-  _ -> Nothing

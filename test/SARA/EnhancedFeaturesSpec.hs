@@ -22,15 +22,13 @@ import Control.Monad.Writer (runWriterT)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Except (runExceptT)
 import Control.Monad (void)
-import qualified BLAKE3
-import qualified Data.ByteString as BS
 
 spec :: Spec
 spec = do
   describe "SARA Enhanced Features" $ do
     
     it "verifies Inverted Index generation logic (seUrl is normalized to root-relative — see mkSearchEntry's Haddock)" $ do
-      let dummyHash = BLAKE3.hash Nothing ([] :: [BS.ByteString])
+      let dummyHash = "0000000000000000000000000000000000000000000000000000000000000000" :: T.Text
       let (e1, c1) = mkSearchEntry (Item "posts/1.md" (ResolvedRoute "url1") KM.empty "Content one" dummyHash)
       seUrl e1 `shouldBe` "/url1"
       c1 `shouldBe` "Content one"
@@ -48,7 +46,8 @@ spec = do
         
         let dsl = do
               remapMetadata [("fromKey", "toKey")]
-              void $ match (glob "posts/*.md") $ \file -> do
+              postsGlob <- glob "posts/*.md"
+              void $ match postsGlob $ \file -> do
                 item <- readMarkdown file
                 validateSEO item
 

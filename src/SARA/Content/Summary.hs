@@ -19,6 +19,9 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Maybe (fromMaybe)
+import SARA.Internal.Aeson (lookupText)
+import Text.HTML.TagSoup (parseTags, innerText)
 
 -- | @{ "title": ..., "url": ..., "date": ..., "excerpt": ... }@ — the
 --   exact shape 'templates/index.html' already expects under
@@ -41,40 +44,27 @@ itemToSummary excerptLength item =
     outputPath = case itemRoute item of
       ResolvedRoute p -> p
 
-    titleValue = case KM.lookup (K.fromText "title") (itemMeta item) of
-      Just v@(Aeson.String _) -> v
-      _                       -> Aeson.String (T.pack (itemPath item))
+    titleValue = Aeson.String $
+      fromMaybe (T.pack (itemPath item)) (lookupText "title" (itemMeta item))
 
-    dateValue = case KM.lookup (K.fromText "date") (itemMeta item) of
-      Just v@(Aeson.String _) -> v
-      _                       -> Aeson.Null
+    dateValue = maybe Aeson.Null Aeson.String (lookupText "date" (itemMeta item))
 
 -- | A short, HTML-tag-stripped preview of rendered body content,
 --   truncated at a word boundary where possible rather than
---   mid-word, with an ellipsis marking truncation. Deliberately
---   simple (no full HTML parser): this only needs to produce a
---   reasonable-looking preview, not a faithful re-render, and a naive
---   angle-bracket strip is total and fast for that purpose.
+--   mid-word, with an ellipsis marking truncation. Uses
+--   'Text.HTML.TagSoup' (already a project dependency, already relied
+--   on for the same "get the plain text out of rendered HTML" job in
+--   'SARA.SEO.Audit') rather than a hand-written angle-bracket
+--   toggle — TagSoup's tokenizer correctly treats a '>' inside a
+--   quoted attribute value as part of the attribute, not a tag close,
+--   which a naive character-by-character scan gets wrong.
 plainTextExcerpt :: Int -> Text -> Text
 plainTextExcerpt maxLen html =
-  let stripped = T.unwords . T.words $ stripTags html  -- collapse whitespace/newlines left by stripping block tags
+  let stripped = T.unwords . T.words $ innerText (parseTags html)  -- collapse whitespace/newlines left by stripping block tags
   in if T.length stripped <= maxLen
      then stripped
      else T.stripEnd (fitToWordBoundary (T.take maxLen stripped)) <> "\x2026"
   where
-    stripTags :: Text -> Text
-    stripTags = go False
-      where
-        go _        ""       = ""
-        go False    t = case T.uncons t of
-          Just ('<', rest) -> go True rest
-          Just (c, rest)   -> T.cons c (go False rest)
-          Nothing          -> ""
-        go True     t = case T.uncons t of
-          Just ('>', rest) -> go False rest
-          Just (_, rest)   -> go True rest
-          Nothing          -> ""
-
     -- If the truncation point landed mid-word, back up to the last
     -- preceding space so the excerpt doesn't end on a half-word.
     fitToWordBoundary :: Text -> Text

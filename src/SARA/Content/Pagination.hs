@@ -11,14 +11,10 @@ module SARA.Content.Pagination
   , buildPaginatedIndex
   ) where
 
-import SARA.Types (ItemP(..), Route(..), ValidationState(..))
+import SARA.Types (ItemP(..), ValidationState(..))
 import SARA.Monad (SaraM)
-import SARA.DSL (render)
-import SARA.Error (SaraError(..), AnySaraError(..))
-import SARA.Routing.Engine (resolveRoute)
-import qualified SARA.Routing.Error as RE
+import SARA.DSL (renderSyntheticPage)
 import SARA.Content.Summary (itemToSummary)
-import Control.Monad.Except (throwError)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as K
@@ -26,7 +22,6 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.FilePath ((</>))
-import qualified BLAKE3
 
 -- | Splits a list into consecutive chunks of at most 'pageSize'
 --   items. Total for any 'pageSize', including @<= 0@: rather than
@@ -77,39 +72,23 @@ renderPage
   -> Int
   -> [ItemP 'Validated Aeson.Object]
   -> SaraM (ItemP 'Validated Aeson.Object)
-renderPage template outDirBase totalPages pageNumber pageItems = do
-  let outPath = pageOutputPath outDirBase pageNumber
-  case resolveRoute (LiteralRoute outPath) "" of
-    Left err -> throwError [routingErrorToSaraError err]
-    Right resolvedRoute -> do
-      let hasPrev = pageNumber > 1
-      let hasNext = pageNumber < totalPages
-      let meta = KM.fromList
-            [ (K.fromText "posts", Aeson.Array (V.fromList (map (itemToSummary 200) pageItems)))
-            , (K.fromText "pageNumber", Aeson.Number (fromIntegral pageNumber))
-            , (K.fromText "totalPages", Aeson.Number (fromIntegral totalPages))
-            , (K.fromText "hasPrev", Aeson.Bool hasPrev)
-            , (K.fromText "prevUrl", Aeson.String (T.pack ("/" <> pageOutputPath outDirBase (pageNumber - 1))))
-            , (K.fromText "hasNext", Aeson.Bool hasNext)
-            , (K.fromText "nextUrl", Aeson.String (T.pack ("/" <> pageOutputPath outDirBase (pageNumber + 1))))
-            ]
-      let syntheticItem = Item
-            { itemPath  = template
-            , itemRoute = resolvedRoute
-            , itemMeta  = meta
-            , itemBody  = ""
-            , itemHash  = BLAKE3.hash Nothing [TE.encodeUtf8 (T.pack (show pageNumber))]
-            }
-      render template syntheticItem
-      pure syntheticItem
+renderPage template outDirBase totalPages pageNumber pageItems =
+  renderSyntheticPage template outPath meta (TE.encodeUtf8 (T.pack (show pageNumber)))
+  where
+    outPath = pageOutputPath outDirBase pageNumber
+    hasPrev = pageNumber > 1
+    hasNext = pageNumber < totalPages
+    meta = KM.fromList
+      [ (K.fromText "posts", Aeson.Array (V.fromList (map (itemToSummary 200) pageItems)))
+      , (K.fromText "pageNumber", Aeson.Number (fromIntegral pageNumber))
+      , (K.fromText "totalPages", Aeson.Number (fromIntegral totalPages))
+      , (K.fromText "hasPrev", Aeson.Bool hasPrev)
+      , (K.fromText "prevUrl", Aeson.String (T.pack ("/" <> pageOutputPath outDirBase (pageNumber - 1))))
+      , (K.fromText "hasNext", Aeson.Bool hasNext)
+      , (K.fromText "nextUrl", Aeson.String (T.pack ("/" <> pageOutputPath outDirBase (pageNumber + 1))))
+      ]
 
 pageOutputPath :: FilePath -> Int -> FilePath
 pageOutputPath outDirBase n
   | n <= 1    = outDirBase </> "index.html"
   | otherwise = outDirBase </> "page" </> show n </> "index.html"
-
-routingErrorToSaraError :: RE.RoutingError -> AnySaraError
-routingErrorToSaraError = \case
-  RE.RouteRegexInvalid p d -> AnySaraError (RouteRegexInvalid p d)
-  RE.RouteConflict f1 f2 o -> AnySaraError (RouteConflict f1 f2 o)
-  RE.RouteUnsafeForWindows p r -> AnySaraError (RouteUnsafeForWindows p r)

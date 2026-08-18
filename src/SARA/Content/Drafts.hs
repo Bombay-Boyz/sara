@@ -22,7 +22,7 @@ import qualified Data.Text as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Format (parseTimeM, defaultTimeLocale)
 import Control.Monad.IO.Class (liftIO)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, listToMaybe)
 
 -- | True iff the item's frontmatter marks it as a draft — @draft:
 --   true@ (YAML boolean) or the strings "true"\/"yes" (case-insensitive,
@@ -54,15 +54,12 @@ isFutureDated now item = case KM.lookup (K.fromText "date") (itemMeta item) of
 --   ISO-8601 timestamp. Tried in order; the first that parses wins.
 parseFrontmatterDate :: String -> Maybe UTCTime
 parseFrontmatterDate s =
-  headMay $ mapMaybe (\fmt -> parseTimeM True defaultTimeLocale fmt s)
+  listToMaybe $ mapMaybe (\fmt -> parseTimeM True defaultTimeLocale fmt s)
     [ "%Y-%m-%dT%H:%M:%S%Q%z"
     , "%Y-%m-%dT%H:%M:%S%Q"
     , "%Y-%m-%d %H:%M:%S"
     , "%Y-%m-%d"
     ]
-  where
-    headMay []    = Nothing
-    headMay (x:_) = Just x
 
 -- | Not a draft, and not scheduled for the future — the two checks a
 --   normal build applies together.

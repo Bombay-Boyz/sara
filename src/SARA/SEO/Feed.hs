@@ -7,9 +7,8 @@ module SARA.SEO.Feed
 import SARA.Types (Item, ItemP(..), Route(..), FeedConfig(..))
 import qualified Data.Text as T
 import qualified Text.XML as XML
-import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
+import Data.Maybe (fromMaybe)
+import SARA.Internal.Aeson (lookupText)
 import qualified Data.Map as Map
 import Development.Shake (Action, liftIO)
 
@@ -33,9 +32,7 @@ mkItem :: FeedConfig -> Item v -> XML.Element
 mkItem cfg item =
   let path = case itemRoute item of ResolvedRoute p -> T.pack p
       loc = feedBaseUrl cfg <> if "/" `T.isPrefixOf` path then path else "/" <> path
-      title = case KM.lookup (K.fromText "title") (itemMeta item) of
-                Just (Aeson.String t) -> t
-                _ -> "Untitled"
+      title = fromMaybe "Untitled" (lookupText "title" (itemMeta item))
   in XML.Element "item" Map.empty
        [ XML.NodeElement $ XML.Element "title" Map.empty [XML.NodeContent title]
        , XML.NodeElement $ XML.Element "link" Map.empty [XML.NodeContent loc]

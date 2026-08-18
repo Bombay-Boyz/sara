@@ -52,7 +52,8 @@ processImage
   -> SafePath      -- ^ Input (path-guarded)
   -> FilePath      -- ^ Output base directory (relative to _site)
   -> Action [AnySaraError]
-processImage spec (SafePath input) outBase = do
+processImage spec input outBase = do
+  let inputPath = unSafePath input
   let formats = if null (imgFormats spec) then [PNG] else imgFormats spec
   let widths  = if null (imgWidths spec)  then [0]   else imgWidths spec
   available <- liftIO verifyImageBinaries
@@ -70,19 +71,19 @@ processImage spec (SafePath input) outBase = do
           -- and say so — silently succeeding with a lower-quality (or
           -- unconverted) asset and no record of why would be its own
           -- silent failure, just one that "worked."
-          copyFile' input output
-          pure [ AnySaraError $ AssetProcessingFailed input
+          copyFile' inputPath output
+          pure [ AnySaraError $ AssetProcessingFailed inputPath
                    ( "required binary '" <> T.pack (binaryFor fmt)
                    <> "' for " <> T.pack (show fmt)
                    <> " conversion was not found on PATH; copied the original file to "
                    <> T.pack output <> " unconverted instead" )
                ]
         else case fmt of
-          WebP -> safeCmd "cwebp" ["-q", show (imgQuality spec), input, "-o", output] >> pure []
-          AVIF -> safeCmd "avifenc" ["--job", "0", input, output] >> pure []
+          WebP -> safeCmd "cwebp" ["-q", show (imgQuality spec), inputPath, "-o", output] >> pure []
+          AVIF -> safeCmd "avifenc" ["--job", "0", inputPath, output] >> pure []
           _    -> if w == 0
-                  then copyFile' input output >> pure []
-                  else safeCmd "convert" [input, "-resize", show w, output] >> pure []
+                  then copyFile' inputPath output >> pure []
+                  else safeCmd "convert" [inputPath, "-resize", show w, output] >> pure []
 
 formatToExt :: ImageFormat -> String
 formatToExt = \case

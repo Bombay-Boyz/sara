@@ -7,11 +7,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
 import qualified Data.Yaml as Yaml
-import qualified Toml as Toml
-import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
+import SARA.Internal.Toml (parseTomlToAeson)
 import SARA.Frontmatter.Detect (FrontmatterFormat(..), detectFormat, splitFrontmatter)
 import SARA.Error (SaraError(..), SaraErrorKind(..), SourcePos(..))
 
@@ -71,42 +68,64 @@ parseFrontmatter path content = do
       _                     -> content
 
 parseYAML :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
-parseYAML path raw body = 
+parseYAML path raw body = do
+  checkYamlComplexity path raw
   case Yaml.decodeEither' (T.encodeUtf8 raw) of
     Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack $ show err)
     Right val -> case val of
       Aeson.Object obj -> Right (obj, body)
       _ -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) "Expected Object"
 
+-- | A coarse, pre-parse guard against YAML's "billion laughs"-style
+--   anchor/alias amplification (audit issue #8): libyaml, and the
+--   'Data.Yaml' binding over it this module uses, expand anchors and
+--   aliases with no built-in cap on the resulting size, unlike every
+--   other adversarial-input class this codebase treats explicitly
+--   (NUL bytes in 'SARA.Security.PathGuard'\/'SARA.Security.ShellGuard',
+--   ReDoS in 'SARA.Security.RegexGuard'). Frontmatter is metadata, not
+--   a document body — legitimate frontmatter is small and has no
+--   business defining dozens of anchors — so both checks are
+--   deliberately conservative: a real frontmatter block will never
+--   come close to either threshold, while a crafted one that would
+--   force pathological expansion is rejected before libyaml ever
+--   sees it.
+--
+--   This is necessarily a heuristic, not a real YAML parse (a real
+--   parse is exactly the expensive operation being guarded against):
+--   it counts anchor (@&name@) and alias (@*name@) *markers* by
+--   textual scan, which can overcount (e.g. a literal @&@ inside a
+--   quoted string) but never undercounts the actual anchor/alias
+--   count a real parse would see, so it fails safe.
+checkYamlComplexity :: FilePath -> Text -> Either (SaraError 'EKFrontmatter) ()
+checkYamlComplexity path raw
+  | T.length raw > maxFrontmatterChars =
+      Left $ FrontmatterParseFailure path (SourcePos path 1 1) $
+        "frontmatter exceeds " <> T.pack (show maxFrontmatterChars)
+          <> " characters (rejected before YAML parsing to bound anchor/alias expansion cost)"
+  | markerCount > maxAnchorAliasMarkers =
+      Left $ FrontmatterParseFailure path (SourcePos path 1 1) $
+        "frontmatter contains " <> T.pack (show markerCount)
+          <> " YAML anchor/alias markers, exceeding the limit of "
+          <> T.pack (show maxAnchorAliasMarkers)
+          <> " (rejected to bound anchor/alias expansion cost)"
+  | otherwise = Right ()
+  where
+    maxFrontmatterChars :: Int
+    maxFrontmatterChars = 65536
+
+    maxAnchorAliasMarkers :: Int
+    maxAnchorAliasMarkers = 64
+
+    markerCount = T.count "&" raw + T.count "*" raw
+
 parseTOML :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
-parseTOML path raw body = 
-  case Toml.parse raw of
-    Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack err)
-    Right table -> 
-      let obj = tableToAeson (Toml.forgetTableAnns table)
-      in Right (obj, body)
+parseTOML path raw body =
+  case parseTomlToAeson raw of
+    Left err  -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack err)
+    Right obj -> Right (obj, body)
 
 parseJSON :: FilePath -> Text -> Text -> Either (SaraError 'EKFrontmatter) (Aeson.Object, Text)
 parseJSON path raw body = 
   case Aeson.eitherDecodeStrict (T.encodeUtf8 raw) of
     Left err -> Left $ FrontmatterParseFailure path (SourcePos path 1 1) (T.pack err)
     Right obj -> Right (obj, body)
-
-tableToAeson :: Toml.Table -> Aeson.Object
-tableToAeson (Toml.MkTable m) = KM.fromList 
-  [ (K.fromText k, valueToAeson v) 
-  | (k, ((), v)) <- Map.toList m 
-  ]
-
-valueToAeson :: Toml.Value -> Aeson.Value
-valueToAeson v = case v of
-  Toml.Bool b -> Aeson.Bool b
-  Toml.Integer i -> Aeson.Number (fromIntegral i)
-  Toml.Double d -> Aeson.Number (realToFrac d)
-  Toml.Text t -> Aeson.String t
-  Toml.ZonedTime t -> Aeson.String (T.pack $ show t)
-  Toml.LocalTime t -> Aeson.String (T.pack $ show t)
-  Toml.Day t -> Aeson.String (T.pack $ show t)
-  Toml.TimeOfDay t -> Aeson.String (T.pack $ show t)
-  Toml.List a -> Aeson.Array (V.fromList $ fmap valueToAeson a)
-  Toml.Table t -> Aeson.Object (tableToAeson t)

@@ -14,20 +14,32 @@ module SARA.Search.Index
 
 import GHC.Generics (Generic)
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Key as K
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Maybe (fromMaybe)
 import SARA.Types (Item, ItemP(..), Route(..))
+import SARA.Internal.Aeson (lookupText)
 import Development.Shake
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Char (isAlphaNum, toLower)
 
+-- | A search index's public, purpose-built summary of an item — not
+--   its raw frontmatter. This is the same "small, purpose-built
+--   summary shape" principle 'SARA.Content.Summary.itemToSummary'
+--   already applies to listing pages, applied here too (audit issue
+--   #11): the prior shape carried the item's *entire* unfiltered
+--   'itemMeta' object into a file the scaffolded 'search.js' fetches
+--   publicly, exposing whatever a content author happened to put in
+--   frontmatter — internal notes, an editor's email, anything never
+--   intended for public display — regardless of whether any template
+--   ever rendered it. Only the two fields the shipped search UI
+--   actually displays are carried here; a site that wants more can
+--   still build its own, since 'mkSearchEntry' remains just one way
+--   to populate a 'SearchEntry'.
 data SearchEntry = SearchEntry
   { seUrl     :: !Text
   , seTitle   :: !Text
-  , seMeta    :: !Aeson.Object
   } deriving (Show, Generic, Aeson.ToJSON, Aeson.FromJSON)
 
 data InvertedIndex = InvertedIndex
@@ -99,9 +111,6 @@ mkSearchEntry item =
       url = if "/" `T.isPrefixOf` rawUrl then rawUrl else "/" <> rawUrl
       entry = SearchEntry
         { seUrl     = url
-        , seTitle   = case KM.lookup (K.fromText "title") (itemMeta item) of
-                        Just (Aeson.String t) -> t
-                        _ -> "Untitled"
-        , seMeta    = itemMeta item
+        , seTitle   = fromMaybe "Untitled" (lookupText "title" (itemMeta item))
         }
   in (entry, itemBody item)

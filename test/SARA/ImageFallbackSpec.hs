@@ -37,7 +37,8 @@ import Data.IORef
 runProcessImage :: FilePath -> ImageSpec -> FilePath -> FilePath -> IO [AnySaraError]
 runProcessImage root imgSpec input outBase = do
   resultRef <- newIORef []
-  case guardPath (ProjectRoot root) input of
+  guardedInput <- guardPath (ProjectRoot root) input
+  case guardedInput of
     Left err -> error ("test setup: guardPath rejected its own fixture: " ++ show err)
     Right safeInput ->
       shake shakeOptions { shakeFiles = root </> "_build", shakeVerbosity = Silent } $

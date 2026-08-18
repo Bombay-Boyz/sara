@@ -11,14 +11,11 @@ module SARA.Routing.Engine
 import SARA.Types (Route(..), RouteState(..))
 import SARA.Security.RegexGuard (mkSafeRegex, unSafeRegex)
 import SARA.Error (SaraError(..), SaraErrorKind(..))
-import qualified SARA.Routing.Error as RE
 import System.FilePath ((</>), replaceExtension, splitFileName, dropExtension, splitDirectories)
 import Data.List (groupBy, sortOn)
 import qualified Data.List as L
 import Data.Function (on)
-import Text.Regex.Base.RegexLike (makeRegexOptsM, matchOnce)
-import qualified Text.Regex.PCRE.Text as RE
-import Data.Array ((!), bounds)
+import SARA.Internal.RegexCompat (compileRegexText, matchCaptures)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Data.Void (Void)
@@ -35,9 +32,10 @@ regexRoute pat repl = case mkSafeRegex pat of
   Left err -> Left err
 
 -- | Apply an abstract route to a concrete source path. Total and pure:
---   'RegexRoute' compiles and matches via 'Text.Regex.Base.RegexLike's
---   pure @Maybe@-typed interface ('makeRegexOptsM', 'matchOnce'), not
---   the 'IO'-typed 'RE.compile'\/'RE.execute' — because 'RegexRoute'
+--   'RegexRoute' compiles and matches via 'SARA.Internal.RegexCompat's
+--   pure @Maybe@-typed interface (itself built on
+--   'Text.Regex.Base.RegexLike's 'makeRegexOptsM'\/'matchOnce'), not
+--   any 'IO'-typed compile\/execute — because 'RegexRoute'
 --   only ever carries a 'SafeRegex', and 'SARA.Security.RegexGuard.mkSafeRegex'
 --   already proved that pattern compiles, recompilation here cannot
 --   fail for any value this function can actually be called with; the
@@ -47,7 +45,7 @@ regexRoute pat repl = case mkSafeRegex pat of
 resolveRoute
   :: Route 'Abstract
   -> FilePath          -- ^ Source path
-  -> Either RE.RoutingError (Route 'Resolved)
+  -> Either (SaraError 'EKRouting) (Route 'Resolved)
 resolveRoute route_ sourcePath = resolved >>= validatePortable
   where
     resolved = case route_ of
@@ -62,17 +60,16 @@ resolveRoute route_ sourcePath = resolved >>= validatePortable
       RegexRoute { rrSafeRegex = safeRegex, rrReplacement = repl } ->
         let pat = unSafeRegex safeRegex
             pathText = T.pack sourcePath
-        in case (makeRegexOptsM RE.compBlank RE.execBlank pat :: Maybe RE.Regex) of
-             Nothing -> Left $ RE.RouteRegexInvalid (T.pack sourcePath) "regex failed to recompile despite passing SafeRegex construction"
+        in case compileRegexText pat of
+             Nothing -> Left $ RouteRegexInvalid (T.pack sourcePath) "regex failed to recompile despite passing SafeRegex construction"
              Just compiledRegex ->
-                 case matchOnce compiledRegex pathText of
-                  Just arr -> 
-                    let captures = map (\i -> let (off, len) = arr ! i
-                                              in T.take len (T.drop off pathText)) 
-                                       [0 .. snd (bounds arr)]
+                 case matchCaptures compiledRegex pathText of
+                  Just spans_ ->
+                    let captures = map (\(off, len) -> T.take len (T.drop off pathText))
+                                       spans_
                     in case interpolateCaptures captures repl of
                          Right resolvedText -> Right $ ResolvedRoute (T.unpack resolvedText)
-                         Left parseErr -> Left $ RE.RouteRegexInvalid repl
+                         Left parseErr -> Left $ RouteRegexInvalid repl
                            ("replacement template is malformed: " <> parseErr)
                   Nothing -> 
                     Right $ ResolvedRoute (replaceExtension sourcePath "html")
@@ -87,9 +84,9 @@ resolveRoute route_ sourcePath = resolved >>= validatePortable
 --   broken on Windows. Hugo's own docs candidly note it doesn't
 --   sanitise this at all; this check exists so SARA doesn't repeat
 --   that gap.
-validatePortable :: Route 'Resolved -> Either RE.RoutingError (Route 'Resolved)
+validatePortable :: Route 'Resolved -> Either (SaraError 'EKRouting) (Route 'Resolved)
 validatePortable r@(ResolvedRoute path)
-  | Just reason <- windowsUnsafeReason path = Left $ RE.RouteUnsafeForWindows path reason
+  | Just reason <- windowsUnsafeReason path = Left $ RouteUnsafeForWindows path reason
   | otherwise                               = Right r
 
 -- | 'Nothing' if every path segment is safe on Windows; otherwise the
@@ -145,7 +142,10 @@ pCapture :: [T.Text] -> Parser T.Text
 pCapture caps = do
   void (chunk "\\")
   digit <- digitChar
-  let idx = read [digit] :: Int
+  -- 'digitChar' guarantees a character in ['0'..'9'], so 'digitToInt' is
+  -- total here in practice; it also skips the 'String'/'read' round trip
+  -- that 'read [digit] :: Int' required for a single character.
+  let idx = Char.digitToInt digit
   return $ case drop idx caps of
     (val:_) -> val
     []      -> "\\" <> T.singleton digit
@@ -156,7 +156,7 @@ pLiteral = (T.singleton <$> anySingleBut '\\') <|> (chunk "\\\\" >> return "\\")
 -- | Detect route conflicts in a list of resolved routes.
 detectRouteConflicts
   :: [(FilePath, Route 'Resolved)]
-  -> [RE.RoutingError]
+  -> [SaraError 'EKRouting]
 detectRouteConflicts routes =
   let groups = groupBy ((==) `on` (getResolvedPath . snd)) (sortOn (getResolvedPath . snd) routes)
   in concatMap checkGroup groups
@@ -164,7 +164,7 @@ detectRouteConflicts routes =
     getResolvedPath :: Route 'Resolved -> FilePath
     getResolvedPath (ResolvedRoute p) = p
     
-    checkGroup :: [(FilePath, Route 'Resolved)] -> [RE.RoutingError]
+    checkGroup :: [(FilePath, Route 'Resolved)] -> [SaraError 'EKRouting]
     checkGroup [] = []
     checkGroup [_] = []
     checkGroup ((f1, r1) : x : xs) =
@@ -175,4 +175,4 @@ detectRouteConflicts routes =
       -- rather than relying on the pattern-match guarantee remaining
       -- true if this function is ever refactored.
       let (f2, _) = L.foldl' (\_ later -> later) x xs
-      in [RE.RouteConflict f1 f2 (getResolvedPath r1)]
+      in [RouteConflict f1 f2 (getResolvedPath r1)]

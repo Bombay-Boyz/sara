@@ -50,7 +50,8 @@ withFeatureProject action =
 runFeaturePipeline :: IO ()
 runFeaturePipeline =
   sara $ do
-    allPosts <- match (glob "posts/*.md") $ \file -> do
+    postsGlob <- glob "posts/*.md"
+    allPosts <- match postsGlob $ \file -> do
       item <- readMarkdown file
       validateSEO item
     published <- filterPublished allPosts

@@ -9,8 +9,6 @@ import SARA.Types
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import Data.Time (UTCTime(..), fromGregorian)
-import Data.ByteString (ByteString)
-import qualified BLAKE3
 
 -- | A minimal, otherwise-valid item carrying only the metadata under
 --   test — the fields 'isDraft'/'isFutureDated' don't look at
@@ -21,7 +19,7 @@ mkItem meta = Item
   , itemRoute = ResolvedRoute "posts/test.html"
   , itemMeta  = meta
   , itemBody  = "body"
-  , itemHash  = BLAKE3.hash Nothing ([] :: [ByteString])
+  , itemHash  = "0000000000000000000000000000000000000000000000000000000000000000"
   }
 
 referenceNow :: UTCTime
