@@ -129,4 +129,6 @@ spec = describe "SARA.Search.Stemmer" $ do
   describe "The motivating example from this module's own Haddock" $
     it "conflates the CONNECT family to a single stem" $ do
       let stems = map stem ["connect", "connected", "connecting", "connection", "connections"]
-      stems `shouldSatisfy` all (== head stems)
+      case stems of
+         []      -> expectationFailure "stems list was empty"
+         (s:_)   -> stems `shouldSatisfy` all (== s)
