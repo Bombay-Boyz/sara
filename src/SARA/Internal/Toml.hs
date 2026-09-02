@@ -33,7 +33,7 @@ import Data.Aeson (Object, Value(..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Char (isAlphaNum)
-import Data.List (foldl')
+
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)

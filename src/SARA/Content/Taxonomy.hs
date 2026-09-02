@@ -41,7 +41,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Char (isAlphaNum, toLower)
-import Data.List (foldl')
+
 import System.FilePath ((</>))
 
 -- | Lowercased, non-alphanumeric runs collapsed to a single hyphen,
