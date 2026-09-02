@@ -17,6 +17,8 @@ module SARA
   , validateArg
   , qualitySealFilePath
   , readQualitySealFile
+  , projectCacheKey
+  , siteScriptCacheKey
   ) where
 
 import SARA.DSL
@@ -31,6 +33,13 @@ import SARA.Monad (SaraM(..), SaraEnv(..), RuleDecl(..), BuildIssue(..))
 import SARA.Security.ShellGuard (validateArg)
 import SARA.Internal.Engine (runBuild)
 import SARA.Internal.Planner (expandRules, collectOutputs)
+import SARA.Internal.Hash (projectCacheKey, siteScriptCacheKey, contentHash)
+import SARA.Internal.FrontmatterCache (loadFrontmatterCache, persistFrontmatterCache)
+import SARA.Security.GlobGuard (unGlobPattern)
+import SARA.Asset.Discover (inferAssetKind)
+import System.FilePath.Glob (globDir1, compile)
+import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as Map
 import SARA.Diagnostics (QualitySeal(..), renderQualitySeal)
 import SARA.LiveReload.Server (broadcastMessage, ClientList)
 import SARA.Template.Lucid (renderLucid)
@@ -82,6 +91,45 @@ saraWithClients mClients = saraWithOptions mClients False
 --   templates, and other planning-time errors are still caught, but
 --   'SARA.Internal.Engine.runBuild' is asked to report the plan instead
 --   of running Shake, so nothing is read from or written to disk.
+-- | Compute the cache-busting manifest for every discovered CSS\/JS
+--   asset across all 'RuleDiscover' patterns — see 'envAssetManifest'
+--   and 'SARA.Internal.Planner.rewriteAssetReferences' for the full
+--   design. Deliberately scoped to just CSS\/JS (via 'inferAssetKind'):
+--   these are the asset types most likely to change during active
+--   development and most worth cache-busting once they don't; other
+--   asset kinds (images, fonts, generic files) are left untouched by
+--   this mechanism entirely, matching engineering roadmap item #6's
+--   stated scope.
+computeAssetManifest :: [GlobPattern] -> IO (Map.Map T.Text T.Text)
+computeAssetManifest patterns = do
+  entries <- concat <$> mapM manifestForPattern patterns
+  pure (Map.fromList entries)
+  where
+    manifestForPattern g = do
+      let patStr = T.unpack (unGlobPattern g)
+      files <- globDir1 (compile patStr) "."
+      concat <$> mapM manifestForFile files
+
+    manifestForFile :: FilePath -> IO [(T.Text, T.Text)]
+    manifestForFile file = case inferAssetKind file of
+      SomeAssetKind StyleAsset  -> (: []) <$> hashedEntry file
+      SomeAssetKind ScriptAsset -> (: []) <$> hashedEntry file
+      _                         -> pure []
+
+    -- Short (8 hex character) hash prefix: plenty of collision
+    -- resistance for cache-busting purposes (this is a "did the
+    -- content change" signal, not a security boundary), and keeps
+    -- the query string short and readable in a browser's network
+    -- panel.
+    hashedEntry file = do
+      bytes <- BS.readFile file
+      let url = "/" <> T.pack (dropDotSlash file)
+          hash = T.take 8 (contentHash bytes)
+      pure (url, hash)
+
+    dropDotSlash ('.' : '/' : rest) = rest
+    dropDotSlash path               = path
+
 saraWithOptions :: Maybe (MVar ClientList) -> Bool -> SaraM () -> IO ()
 saraWithOptions mClients dryRun m = do
   cwd <- getCurrentDirectory
@@ -101,6 +149,7 @@ saraWithOptions mClients dryRun m = do
         }
   
   errorRef <- newIORef []
+  frontmatterCache <- loadFrontmatterCache root
   
   -- Step 1: Execute DSL to collect RuleDecls. The site graph isn't
   -- known yet at this point, so the environment carries an empty
@@ -113,9 +162,16 @@ saraWithOptions mClients dryRun m = do
         , envSiteGraph = HS.empty
         , envRemapRules = []
         , envBuildIssues = errorRef
+        , envFrontmatterCache = frontmatterCache
+        , envAssetManifest = Map.empty
         }
   
   result <- runExceptT $ runWriterT $ runReaderT (unSaraM m) initialEnv
+  -- Persisted after every run (success or failure) that got far enough
+  -- to parse anything at all — a build that fails partway through
+  -- still keeps whatever it managed to cache along the way, so the
+  -- next attempt benefits from it too rather than starting cold again.
+  persistFrontmatterCache root frontmatterCache
   
   case result of
     Left errs -> do
@@ -135,7 +191,8 @@ saraWithOptions mClients dryRun m = do
       -- own rule-registration phase.
       expanded <- expandRules envWithRemaps rules
       let siteGraph = HS.fromList (collectOutputs envWithRemaps expanded)
-      let finalEnv = envWithRemaps { envSiteGraph = siteGraph }
+      assetManifest <- computeAssetManifest [ g | RuleDiscover g <- expanded ]
+      let finalEnv = envWithRemaps { envSiteGraph = siteGraph, envAssetManifest = assetManifest }
       
       runBuild finalEnv rules
 

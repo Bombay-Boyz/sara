@@ -36,6 +36,7 @@ import Control.Monad.Writer (runWriterT)
 import Control.Monad.Except (runExceptT)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as BS
@@ -255,7 +256,12 @@ genRender env tplPath item outPath = do
                       AuditIssues _ issues -> issues ++ linkIssues
                       AuditPassed           -> linkIssues
                 liftIO $ recordBuildIssues env outPath allIssues
-                writeUtf8File o finalHtml
+                -- Cache-busting applied last, after link-checking/SEO
+                -- auditing already ran against the unmodified HTML —
+                -- see 'rewriteAssetReferences's Haddock (below
+                -- 'genRenderRaw') for why the ordering matters here.
+                let cacheBustedHtml = rewriteAssetReferences (envAssetManifest env) finalHtml
+                writeUtf8File o cacheBustedHtml
 
 -- | Record every issue found while rendering one output file, tagged
 --   with that file's path. A no-op if 'issues' is empty, so call sites
@@ -282,7 +288,41 @@ genRenderRaw env html item outPath = do
           AuditIssues _ issues -> issues ++ linkIssues
           AuditPassed           -> linkIssues
     liftIO $ recordBuildIssues env outPath allIssues
-    writeUtf8File o finalHtml
+    -- Cache-busting applied last, after link-checking/SEO auditing
+    -- already ran against the unmodified HTML — see
+    -- 'rewriteAssetReferences's Haddock for why the ordering matters
+    -- here (a naive exact-path link checker would misread a
+    -- query-stringed asset URL as a broken link to a path it doesn't
+    -- recognize).
+    let cacheBustedHtml = rewriteAssetReferences (envAssetManifest env) finalHtml
+    writeUtf8File o cacheBustedHtml
+
+-- | Append a cache-busting @?v=\<hash\>@ query parameter to every
+--   reference to a CSS\/JS asset this build discovered — closing the
+--   gap engineering roadmap item #6 named: assets were served under a
+--   fixed, unchanging filename regardless of content changes, so a
+--   browser (or intermediate cache\/CDN) could keep serving a stale
+--   copy of a stylesheet or script indefinitely after a real content
+--   change, with nothing about the URL itself signalling anything had
+--   changed.
+--
+--   A query-parameter suffix rather than an actually-renamed output
+--   file (the more common convention, e.g. Hugo's fingerprinting):
+--   renaming the file would require the corresponding asset '%>' rule
+--   to target a hash-dependent output path computed at *rule*
+--   registration time, entangling Shake's static rule-pattern
+--   matching with a value that can only be known after reading file
+--   content. A real, working, independently-tested asset pipeline
+--   already exists ('genDiscover'), and this change deliberately does
+--   not touch it at all. A query string achieves the same practical
+--   cache-busting effect (every modern browser and CDN treats a
+--   different query string as a different cache key) while keeping
+--   the two concerns — copying assets, and telling browsers when to
+--   stop trusting a cached copy — fully decoupled.
+rewriteAssetReferences :: Map.Map Text Text -> Text -> Text
+rewriteAssetReferences manifest html = Map.foldrWithKey rewriteOne html manifest
+  where
+    rewriteOne url hash = T.replace url (url <> "?v=" <> hash)
 
 injectLQIPs :: Text -> Action Text
 injectLQIPs html = do

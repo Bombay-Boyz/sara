@@ -25,6 +25,8 @@ module SARA.TypedMetadataSpec (spec) where
 import Test.Hspec
 import SARA
 import SARA.Monad (SaraM(..), SaraEnv(..), RuleDecl)
+import SARA.Internal.FrontmatterCache (loadFrontmatterCache)
+import qualified Data.Map.Strict as Map
 import GHC.Generics (Generic)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
@@ -70,12 +72,15 @@ runInTempProject :: FilePath -> SaraM a -> IO (Either [AnySaraError] (a, [RuleDe
 runInTempProject tmpDir action = do
   errorRef <- newIORef []
   root <- mkProjectRoot tmpDir
+  frontmatterCache <- loadFrontmatterCache root
   let env = SaraEnv
         { envConfig = defaultConfig
         , envRoot = root
         , envSiteGraph = HS.empty
         , envRemapRules = []
         , envBuildIssues = errorRef
+        , envFrontmatterCache = frontmatterCache
+        , envAssetManifest = Map.empty
         }
   runExceptT $ runWriterT $ runReaderT (unSaraM action) env
 

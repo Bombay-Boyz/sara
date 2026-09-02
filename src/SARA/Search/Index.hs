@@ -16,13 +16,15 @@ import GHC.Generics (Generic)
 import qualified Data.Aeson as Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import SARA.Types (Item, ItemP(..), Route(..))
 import SARA.Internal.Aeson (lookupText)
+import SARA.Search.Stemmer (stem)
 import Development.Shake
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Char (isAlphaNum, toLower)
+import Text.HTML.TagSoup (parseTags, maybeTagText)
 
 -- | A search index's public, purpose-built summary of an item — not
 --   its raw frontmatter. This is the same "small, purpose-built
@@ -42,9 +44,21 @@ data SearchEntry = SearchEntry
   , seTitle   :: !Text
   } deriving (Show, Generic, Aeson.ToJSON, Aeson.FromJSON)
 
+-- | @index@ maps each stemmed term to the set of documents containing
+--   it, paired with that term's *frequency within each document*
+--   (not just presence/absence) — the raw ingredient a client needs
+--   to rank results by relevance (e.g. TF-IDF: term frequency here,
+--   combined at query time with inverse document frequency derived
+--   from @Map.size documents@ and how many documents map to a given
+--   term). Scoring itself is deliberately left to the query side
+--   rather than baked into a single precomputed number stored here,
+--   the same way a real inverted index (Lucene, etc.) separates
+--   "what the index records" from "how a query scores it" — so a
+--   future ranking change doesn't require re-deriving the index
+--   format itself.
 data InvertedIndex = InvertedIndex
   { documents :: !(Map.Map Int SearchEntry)
-  , index     :: !(Map.Map Text (Set.Set Int))
+  , index     :: !(Map.Map Text (Map.Map Int Int))
   } deriving (Show, Generic, Aeson.ToJSON, Aeson.FromJSON)
 
 data PartialIndex = PartialIndex
@@ -81,20 +95,75 @@ mergePartialIndexes partialPaths outPath = do
       invIdx = InvertedIndex { documents = docMap, index = termMap }
   liftIO $ Aeson.encodeFile outPath invIdx
   where
-    addPartial (docId, p) acc =
-      foldr (\token m -> Map.insertWith Set.union token (Set.singleton docId) m) acc (piTokens p)
+    addPartial (docId, p) acc = addTermFrequencies docId (piTokens p) acc
 
-buildInvertedIndex :: [(Int, (Text, Text))] -> Map.Map Text (Set.Set Int)
+buildInvertedIndex :: [(Int, (Text, Text))] -> Map.Map Text (Map.Map Int Int)
 buildInvertedIndex docs = foldr addDoc Map.empty docs
   where
     addDoc (docId, (title, content)) acc =
-      let tokens = tokenize (title <> " " <> content)
-      in foldr (\token m -> Map.insertWith Set.union token (Set.singleton docId) m) acc tokens
+      addTermFrequencies docId (tokenize (title <> " " <> content)) acc
 
+-- | Fold a document's token list into the shared term -> (docId ->
+--   frequency) map, counting repeats within this one document rather
+--   than collapsing them into presence/absence — see 'InvertedIndex'.
+addTermFrequencies :: Int -> [Text] -> Map.Map Text (Map.Map Int Int) -> Map.Map Text (Map.Map Int Int)
+addTermFrequencies docId tokens acc =
+  foldr bump acc tokens
+  where
+    bump token = Map.insertWith (Map.unionWith (+)) token (Map.singleton docId 1)
+
+-- | Tokenizes rendered HTML into stemmed, stopword-filtered search
+--   terms.
+--
+--   __Stages, in order__:
+--
+--   1. Strip HTML tags, keeping only text-node content (via
+--      'Text.HTML.TagSoup'). Previously this tokenized the raw HTML
+--      *string* directly — a shortcode's own markup (e.g. an
+--      @\<img\>@\/@\<picture\>@ tag's attributes) leaked into the
+--      index as garbled tokens like @"pimage"@ (@\<p\>{{image@ mashed
+--      together), confirmed directly while testing the shortcode
+--      escaping fix elsewhere in this codebase. Text nodes are joined
+--      with spaces (not 'Text.HTML.TagSoup.innerText', which
+--      concatenates adjacent text nodes with no separator at all,
+--      merging words across a paragraph boundary like
+--      @"...here.Next paragraph..."@) so tag boundaries don't fuse
+--      unrelated words together.
+--   2. Lower-case and strip non-alphanumeric characters per word,
+--      same as before.
+--   3. Drop stopwords — semantically empty for search relevance, and
+--      otherwise the single most frequent (hence least useful)
+--      entries in the index.
+--   4. Stem what's left ('SARA.Search.Stemmer.stem'), so
+--      "connect"\/"connected"\/"connecting"\/"connection" conflate to
+--      one index term instead of four unrelated ones — the entire
+--      point of running a stemmer ahead of an inverted index.
 tokenize :: Text -> [Text]
-tokenize = filter (not . T.null) 
-         . map (T.filter isAlphaNum . T.map toLower) 
+tokenize = map stem
+         . filter (`Set.notMember` stopwords)
+         . filter (not . T.null)
+         . map (T.filter isAlphaNum . T.map toLower)
          . T.words
+         . stripHtmlToPlainText
+
+stripHtmlToPlainText :: Text -> Text
+stripHtmlToPlainText = T.unwords . mapMaybe maybeTagText . parseTags
+
+-- | A small, standard set of high-frequency English words carrying
+--   essentially no search-relevance signal on their own. Deliberately
+--   conservative (not the full ~180-word NLTK list) — the goal is
+--   removing words so common they'd otherwise dominate every
+--   document's token list, not attempting a linguistically complete
+--   stopword set.
+stopwords :: Set.Set Text
+stopwords = Set.fromList
+  [ "a", "an", "and", "are", "as", "at", "be", "but", "by"
+  , "for", "if", "in", "into", "is", "it", "no", "not", "of"
+  , "on", "or", "such", "that", "the", "their", "then", "there"
+  , "these", "they", "this", "to", "was", "will", "with", "from"
+  , "has", "have", "had", "been", "do", "does", "did", "can"
+  , "could", "would", "should", "i", "you", "he", "she", "we"
+  ]
 
 -- | Helper to create an entry from an Item.
 mkSearchEntry :: Item v -> (SearchEntry, Text)

@@ -130,6 +130,9 @@ library
     SARA.Content.Pagination
     SARA.Diagnostics
     SARA.Asset.Image
+    SARA.Internal.FrontmatterCache
+    SARA.Internal.TemplateCheck
+    SARA.Search.Stemmer
   other-modules:
     SARA.Internal.Planner
     SARA.Internal.Engine
@@ -143,6 +146,7 @@ library
     base                     >= 4.16  && < 5,
     aeson                    >= 2.0,
     cryptohash-sha256        >= 0.11,
+    base16-bytestring        >= 1.0,
     bytestring               >= 0.11,
     cmark-gfm                >= 0.2,
     filepattern              >= 0.1,
@@ -150,7 +154,6 @@ library
     fsnotify                 >= 0.4,
     JuicyPixels              >= 3.3,
     base64-bytestring        >= 1.2,
-    base16-bytestring        >= 1.0,
     ansi-terminal            >= 1.0,
     optparse-applicative     >= 0.18,
     prettyprinter            >= 1.7,
@@ -190,6 +193,19 @@ executable sara
   main-is:          Main.hs
   hs-source-dirs:   app
   default-language: GHC2021
+  -- Required for SARA.Internal.Engine.executeBuild's parallel Shake
+  -- builds to actually take effect (shakeThreads is a no-op without
+  -- the threaded RTS -- GHC's default runtime has exactly one
+  -- capability regardless of what shakeThreads requests). This only
+  -- benefits builds this compiled executable runs directly (the
+  -- zero-config default site) -- a project's own site.hs, run via
+  -- runghc as this CLI's default today, is interpreted and cannot
+  -- use the threaded RTS at all (runghc itself rejects -N flags
+  -- outright: "requires the program to be built with -threaded").
+  -- Full effect for real projects needs site.hs compiled, not
+  -- interpreted -- see BUILD_AND_FIXES_SUMMARY.md's engineering
+  -- roadmap, item #1.
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
   build-depends:
     base, sara, optparse-applicative, text, directory, warp, filepath, aeson, process, temporary
 
@@ -202,7 +218,6 @@ test-suite sara-test
     SARA.BuildIssueReportSpec
     SARA.DraftsSpec
     SARA.TaxonomySpec
-    SARA.TypedMetadataSpec
     SARA.PaginationSpec
     SARA.QualitySealBridgeSpec
     SARA.DryRunSpec
@@ -227,8 +242,10 @@ test-suite sara-test
     SARA.SecuritySpec
     SARA.SEOSpec
     SARA.SmokeSpec
+    SARA.StemmerSpec
     SARA.StressSpec
     SARA.TemplateStandardSpec
+    SARA.TemplateCheckSpec
     SARA.TypedMetadataSpec
   hs-source-dirs:   test
   default-language: GHC2021

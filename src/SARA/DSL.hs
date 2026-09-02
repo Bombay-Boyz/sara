@@ -12,6 +12,7 @@ module SARA.DSL
   , toRenderableItem
   , validateSEO
   , render
+  , renderTyped
   , renderWith
   , renderSyntheticPage
   , remapMetadata
@@ -32,7 +33,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import SARA.Types (Item, ItemP(..), ValidationState(..), Route(..), RouteState(..), FeedConfig(..))
 import SARA.Security.GlobGuard (GlobPattern, unGlobPattern, mkGlobPattern)
-import SARA.Security.PathGuard (guardPath, unSafePath)
+import SARA.Security.PathGuard (guardPath)
 import SARA.Security.HtmlEscape (escapeHtml)
 import SARA.Monad (SaraM(..), RuleDecl(..), SaraEnv(..))
 import SARA.Config (SaraConfig(..))
@@ -54,19 +55,15 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
-import qualified Crypto.Hash.SHA256 as SHA256
-import qualified Data.ByteString.Base16 as Base16
 import qualified Data.Yaml as Yaml
 import qualified Data.Text.IO as TIO
 import System.FilePath (takeExtension)
 import System.FilePath.Glob (globDir1, compile)
-
--- | Hex-encoded SHA-256 of a byte string — see 'SARA.Internal.Hash's
---   dependency-provenance note for why SHA-256 rather than the
---   BLAKE3 this project's Hackage-only dependency graph made
---   unreachable in this build environment.
-contentHash :: BS.ByteString -> Text
-contentHash = T.decodeUtf8 . Base16.encode . SHA256.hash
+import SARA.Internal.Hash (contentHash)
+import SARA.Internal.FrontmatterCache (lookupFresh, recordEntry)
+import SARA.Internal.TemplateCheck (GFieldNames, fieldNamesOf, unknownTemplateFields)
+import GHC.Generics (Rep)
+import Data.Proxy (Proxy(..))
 
 -- | Match source files by glob and run logic for each.
 -- | Matches files against a glob pattern and applies the given
@@ -155,8 +152,26 @@ readMarkdownWith customHandler file = do
   -- API a caller can invoke directly, bypassing 'match' entirely.
   guarded <- liftIO $ guardPath (envRoot env) file
   _safePath <- liftEither $ first ((:[]) . AnySaraError) guarded
-  content <- liftIO $ T.decodeUtf8 <$> BS.readFile file
-  (meta, body) <- liftEither $ first (:[]) $ first AnySaraError (parseFrontmatter file content)
+  rawBytes <- liftIO $ BS.readFile file
+  let content = T.decodeUtf8 rawBytes
+  -- 'lookupFresh'/'recordEntry' cache only the frontmatter *parse*
+  -- (format detection plus YAML/TOML parsing) — the file is still
+  -- read every time, so 'itemHash' below keeps its exact original
+  -- meaning (a hash of the file's raw bytes) whether or not this
+  -- specific call hits the cache. See
+  -- 'SARA.Internal.FrontmatterCache' for why this is the piece worth
+  -- caching: it's the CPU-bound, safely-skippable part, while a
+  -- sequential read of one small file is comparatively cheap even
+  -- when it's the N-1 unchanged files paying that cost on every
+  -- rebuild (engineering roadmap item #3).
+  let cache = envFrontmatterCache env
+  cached <- liftIO $ lookupFresh cache file rawBytes
+  (meta, body) <- case cached of
+    Just hit -> pure hit
+    Nothing -> do
+      parsed <- liftEither $ first (:[]) $ first AnySaraError (parseFrontmatter file content)
+      liftIO $ uncurry (recordEntry cache file rawBytes) parsed
+      pure parsed
   let rules = envRemapRules env
   remappedMeta <- liftEither $ first (:[]) $ first AnySaraError (Remap.remapMetadata rules file meta)
   -- 2. Expand shortcodes with industrial image support
@@ -272,6 +287,36 @@ render tpl item = do
   let outPath = case itemRoute item of
                   ResolvedRoute p -> p
   tell [RuleRender tpl item outPath]
+
+-- | Like 'render', but for a *typed* item ('SARA.DSL.readMarkdownAs'
+--   metadata, not the default untyped @Aeson.Object@) — additionally
+--   validates, before any rendering happens at all, that every field
+--   the template references actually exists on @meta@'s type. A
+--   typo'd or renamed field is a build failure with the exact file,
+--   line, and field name, not a silently blank spot on a rendered
+--   page. See 'SARA.Internal.TemplateCheck' for exactly what is and
+--   isn't checked (in particular: nested\/dotted field access and
+--   references inside a section body are intentionally not
+--   validated, not validated-and-wrong).
+--
+--   Opt-in alongside the existing 'render' rather than a replacement
+--   for it: this only works for items with a concrete, 'Generic'
+--   metadata type to check field names against — 'readMarkdown's
+--   default @Aeson.Object@-typed items have no fixed field list in
+--   the first place, so they still go through plain 'render'.
+renderTyped
+  :: forall meta. (GFieldNames (Rep meta), Aeson.ToJSON meta)
+  => FilePath
+  -> ItemP 'Validated meta
+  -> SaraM ()
+renderTyped tplPath item = do
+  templateText <- liftIO $ TIO.readFile tplPath
+  let knownFields = fieldNamesOf (Proxy @meta)
+      problems = unknownTemplateFields knownFields templateText
+  case problems of
+    [] -> render tplPath (toRenderableItem item)
+    _  -> throwError
+      [ AnySaraError (TemplateUnknownField tplPath line field) | (field, line) <- problems ]
 
 -- | Render an Item using a custom Haskell-based renderer.
 renderWith :: (Item 'Validated -> Text) -> Item 'Validated -> SaraM ()

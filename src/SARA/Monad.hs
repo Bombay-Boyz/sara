@@ -17,9 +17,11 @@ import Control.Monad.IO.Class (MonadIO)
 import Data.Text (Text)
 import Data.IORef (IORef)
 import Data.HashSet (HashSet)
+import qualified Data.Map.Strict as Map
 import SARA.Config (SaraConfig, ProjectRoot)
 import SARA.Error (AnySaraError)
 import SARA.Types (GlobPattern, Item, ValidationState(..), FeedConfig)
+import SARA.Internal.FrontmatterCache (FrontmatterCache)
 
 -- | The site graph tracks all resolved output paths.
 type SiteGraph = HashSet FilePath
@@ -48,6 +50,18 @@ data SaraEnv = SaraEnv
   --   directly from the (expanded) 'RuleDecl' list.
   , envSiteGraph  :: !SiteGraph
   , envRemapRules :: ![(Text, Text)]
+  -- | Cache-busting query parameter for every discovered CSS\/JS
+  --   asset, keyed by its site-relative URL (e.g. @\"\/assets\/style.css\"@
+  --   -> a short content-hash string). Known ahead of time as a plain
+  --   value, the same way and for the same reason as 'envSiteGraph' —
+  --   computed once in 'SARA.saraWithOptions' from the expanded
+  --   'RuleDecl' list's 'SARA.Monad.RuleDiscover' patterns, before
+  --   Shake runs, and consulted by
+  --   'SARA.Internal.Planner.rewriteAssetReferences' when writing out
+  --   each page's final HTML. See that function's Haddock for why
+  --   this is a query-parameter suffix rather than a renamed output
+  --   file (engineering roadmap item #6).
+  , envAssetManifest :: !(Map.Map Text Text)
   -- | Every SEO/link issue found while rendering, attributed to the
   --   file it came from. Mutable of necessity — unlike 'envSiteGraph',
   --   this genuinely cannot be known before rendering happens, since
@@ -58,6 +72,19 @@ data SaraEnv = SaraEnv
   --   Accumulated via 'Data.IORef.atomicModifyIORef'', which is safe
   --   under Shake's concurrent scheduler.
   , envBuildIssues :: !(IORef [BuildIssue])
+  -- | A persistent, on-disk cache of parsed frontmatter, closing
+  --   engineering roadmap item #3: without it, 'SARA.DSL.match'
+  --   re-reads and re-parses every matched file's frontmatter on
+  --   every single rebuild, even for the files that weren't the one
+  --   just saved. Mutable of necessity, like 'envBuildIssues' above —
+  --   unlike 'envSiteGraph', this genuinely can't be reified as a
+  --   plain up-front value, since its final contents depend on which
+  --   files individually turn out to be unchanged vs. changed, known
+  --   only incrementally as 'SARA.DSL.match' processes each one in
+  --   turn. See 'SARA.Internal.FrontmatterCache' for the full design
+  --   rationale, including why this has to be a standalone cache
+  --   rather than a Shake oracle.
+  , envFrontmatterCache :: !FrontmatterCache
   }
 
 -- | Declarations produced by the DSL.

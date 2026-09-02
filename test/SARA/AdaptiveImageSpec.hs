@@ -13,11 +13,12 @@ spec = do
     it "parses key-value args correctly" $ do
       let input = "{{% image src=\"photo.jpg\" alt=\"A sunset\" %}}"
       let res = parseShortcodes input
-      length res `shouldBe` 1
-      let sc = head res
-      scName sc `shouldBe` "image"
-      Map.lookup "src" (scArgs sc) `shouldBe` Just "photo.jpg"
-      Map.lookup "alt" (scArgs sc) `shouldBe` Just "A sunset"
+      case res of
+        [sc] -> do
+          scName sc `shouldBe` "image"
+          Map.lookup "src" (scArgs sc) `shouldBe` Just "photo.jpg"
+          Map.lookup "alt" (scArgs sc) `shouldBe` Just "A sunset"
+        _ -> expectationFailure $ "expected exactly one shortcode, got " ++ show (length res)
 
     it "expands shortcodes into HTML picture tags" $ do
       let input = "Check this: {{% image src=\"sunset.jpg\" alt=\"Sunset\" %}}"

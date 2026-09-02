@@ -21,12 +21,13 @@ import qualified Data.Aeson as Aeson
 import System.Directory (getCurrentDirectory, createDirectoryIfMissing, doesFileExist, findExecutable)
 import System.FilePath ((</>), takeExtension, makeRelative)
 import System.Environment (withArgs, getArgs, getEnvironment)
-import System.Process (proc, createProcess, waitForProcess, std_in, std_out, std_err, env, StdStream(..))
-import System.IO.Temp (withSystemTempDirectory)
+import System.Process (proc, createProcess, waitForProcess, std_in, env, StdStream(..), readProcessWithExitCode)
 import System.Timeout (timeout)
 import System.Exit (ExitCode(..), exitFailure)
+import Control.Exception (catch, IOException)
+import Data.List (isInfixOf)
 
-data BuildOpts = BuildOpts { bldDryRun :: !Bool }
+data BuildOpts = BuildOpts { bldDryRun :: !Bool, bldCacheKey :: !Bool }
 data ServeOpts = ServeOpts { srvPort :: !Int }
 
 data Command
@@ -46,7 +47,9 @@ main = do
                         (fullDesc <> progDesc "SARA: Simple, Adaptive, Responsive Architecture")
       cmd <- execParser parser
       case cmd of
-        Build bOpts  -> runDefaultBuild Nothing (bldDryRun bOpts)
+        Build bOpts
+          | bldCacheKey bOpts -> runCacheKey
+          | otherwise         -> runDefaultBuild Nothing (bldDryRun bOpts)
         Serve sOpts  -> runServe (srvPort sOpts)
         Import path  -> runImport path
         New maybePath maybeTpl -> runNew maybePath maybeTpl
@@ -63,23 +66,41 @@ runDefaultBuild mClients dryRun = do
     then runCustomSiteHs dryRun
     else putStrLn "SARA: No site.hs found. Using zero-config defaults..." >> withArgs [] (saraWithOptions mClients dryRun defaultSite)
 
--- | Compiles and runs a project's own @site.hs@ via @runghc@, in a
---   subprocess, with a bounded timeout and specific, actionable
---   diagnostics — rather than either the silent wrong-pipeline
---   substitution this used to do, or an unbounded 'runghc' call, which
---   was confirmed (while building this fix) to hang indefinitely with
---   no visible error when the 'sara' library isn't registered where
---   'runghc' can see it.
+-- | Directory used to cache a compiled @site.hs@ binary between runs
+--   — see 'ensureSiteCompiled'.
+siteCacheDir :: FilePath
+siteCacheDir = ".sara" </> "site-cache"
+
+siteCacheBinaryPath :: FilePath
+siteCacheBinaryPath = siteCacheDir </> "site-exe"
+
+siteCacheKeyPath :: FilePath
+siteCacheKeyPath = siteCacheDir </> "cache-key.txt"
+
+-- | Compiles and runs a project's own @site.hs@ — compiling it once
+--   and reusing that compiled binary on every subsequent run as long
+--   as neither @site.hs@ (nor any sibling @.hs@ file it might import,
+--   nor the active GHC version) has changed since. This used to
+--   re-interpret @site.hs@ from scratch via @runghc@ on every single
+--   build, including every file-watch-triggered rebuild during 'sara
+--   serve' — paying full parse + typecheck + interpret cost on every
+--   save even when only a markdown file changed and @site.hs@ itself
+--   was completely untouched. See BUILD_AND_FIXES_SUMMARY.md's
+--   engineering roadmap, item #1.
 --
---   Requires 'sara' to have been installed into the ambient GHC
---   environment first (@cabal install --lib .@ from this source tree,
---   or @cabal install --lib sara@ once published) — this is the
---   standard Cabal mechanism for making a library available to
---   ad-hoc scripts run via a bare 'runghc', and is genuinely the
---   difference between this working and hanging: confirmed directly
---   while building this fix that a plain 'runghc site.hs' with no such
---   installation step hangs, and the identical command succeeds in a
---   few seconds once the library is installed.
+--   This also happens to be the other half of item #2's story
+--   (parallel Shake builds): GHC's threaded RTS, which parallel
+--   builds need, is unavailable to interpreted code — @runghc@
+--   rejects @-N@ RTS flags outright — so compiling @site.hs@ is a
+--   prerequisite for a real project's build to benefit from
+--   parallelism at all, not just an independent speedup of its own.
+--
+--   A bounded timeout still guards *running* the compiled binary
+--   (mirroring the previous @runghc@ timeout's intent): a genuine
+--   infinite loop in a project's own build logic is exactly as
+--   possible in compiled code as interpreted, so that risk doesn't go
+--   away just because compilation itself can no longer hang the way
+--   @runghc@ package-resolution apparently could.
 --
 --   '--dry-run' is threaded through via the @SARA_DRY_RUN@ environment
 --   variable (see 'SARA.sara's Haddock) rather than a command-line
@@ -89,63 +110,99 @@ runDefaultBuild mClients dryRun = do
 --   @site.hs@ already reads this one environment variable for free.
 runCustomSiteHs :: Bool -> IO ()
 runCustomSiteHs dryRun = do
-  putStrLn "SARA: Found site.hs — compiling and running it via 'runghc'..."
-  mRunghc <- findExecutable "runghc"
-  case mRunghc of
-    Nothing -> do
-      putStrLn "SARA: 'runghc' was not found on PATH — it ships with GHC, so this usually means GHC isn't installed or isn't on PATH."
-      exitFailure
-    Just runghcPath -> do
-      -- A pre-flight check, not just the timeout below: without it,
-      -- the single most common failure mode (sara isn't registered
-      -- where runghc can see it) is only discovered after waiting out
-      -- the full 120s timeout. Checked here, it fails in a couple of
-      -- seconds with the exact same actionable message, since it's
-      -- the identical underlying cause either way.
-      visible <- checkSaraLibraryVisible runghcPath
-      if not visible
-        then do
-          putStrLn "SARA: The 'sara' library isn't visible to 'runghc' yet."
-          putStrLn "      Fix: run 'cabal install --lib .' from the SARA source tree (or 'cabal install --lib sara' once it's published), then retry."
-          exitFailure
-        else do
-          baseEnv <- getEnvironment
-          let procEnv = if dryRun then ("SARA_DRY_RUN", "1") : baseEnv else baseEnv
-          (_, _, _, ph) <- createProcess
-            (proc runghcPath ["site.hs"]) { std_in = NoStream, env = Just procEnv }
-          result <- timeout (120 * 1000000) (waitForProcess ph)
-          case result of
-            Nothing -> do
-              putStrLn "SARA: Timed out after 120s waiting for site.hs to build and run."
-              putStrLn "      The library was visible to a trivial check but the real site.hs still hung or took too long -- this is likely a genuine issue in site.hs itself (e.g. an infinite loop), not a missing-package problem."
-              exitFailure
-            Just ExitSuccess -> pure ()
-            Just (ExitFailure code) -> do
-              putStrLn $ "SARA: site.hs exited with an error (exit code " ++ show code ++ ")."
-              exitFailure
+  compiled <- ensureSiteCompiled
+  case compiled of
+    Left err -> putStrLn err >> exitFailure
+    Right binPath -> runCompiledSite binPath dryRun
 
--- | The pre-flight check 'runCustomSiteHs' uses: can 'runghc' resolve
---   @import SARA@ at all? Implemented by actually attempting it -- a
---   trivial temp file with nothing but that import and a no-op @main@
---   -- rather than inspecting GHC's package environment files
---   directly, since their exact format and location varies across GHC
---   versions and platforms (this project alone supports GHC 9.4.7
---   through 9.14.1) and this codebase would rather ask the real tool
---   the real question than maintain its own brittle parser for
---   environment-file internals it doesn't own the format of. Bounded
---   to a short timeout (10s is generous for compiling one import) so
---   a hang here -- the exact failure mode this check exists to avoid
---   waiting out on the real site.hs -- doesn't recreate the same
---   problem one level up.
-checkSaraLibraryVisible :: FilePath -> IO Bool
-checkSaraLibraryVisible runghcPath =
-  withSystemTempDirectory "sara-visibility-check" $ \tmpDir -> do
-    let probePath = tmpDir </> "SaraVisibilityProbe.hs"
-    writeFile probePath "import SARA\nmain :: IO ()\nmain = pure ()\n"
-    (_, _, _, ph) <- createProcess
-      (proc runghcPath [probePath]) { std_in = NoStream, std_out = CreatePipe, std_err = CreatePipe }
-    result <- timeout (10 * 1000000) (waitForProcess ph)
-    pure (result == Just ExitSuccess)
+-- | Ensures a compiled, up-to-date @site.hs@ binary exists at
+--   'siteCacheBinaryPath', compiling fresh only when the cache key
+--   (hash of every @.hs@ file under the project, plus the active GHC
+--   version) differs from the one recorded for whatever binary is
+--   already cached there.
+ensureSiteCompiled :: IO (Either String FilePath)
+ensureSiteCompiled = do
+  cwd <- getCurrentDirectory
+  createDirectoryIfMissing True siteCacheDir
+  currentKey <- computeCacheKey cwd
+  cachedKey <- readCachedKey
+  binaryExists <- doesFileExist siteCacheBinaryPath
+  if binaryExists && cachedKey == Just currentKey
+    then pure (Right siteCacheBinaryPath)
+    else compileSite currentKey
+
+computeCacheKey :: FilePath -> IO T.Text
+computeCacheKey cwd = do
+  scriptKey <- siteScriptCacheKey cwd
+  mGhc <- findExecutable "ghc"
+  ghcVersion <- case mGhc of
+    Nothing -> pure "no-ghc"
+    Just ghcPath -> do
+      (exitCode, out, _) <- readProcessWithExitCode ghcPath ["--numeric-version"] ""
+      pure $ case exitCode of
+        ExitSuccess -> filter (/= '\n') out
+        ExitFailure _ -> "unknown-ghc-version"
+  pure (scriptKey <> ":" <> T.pack ghcVersion)
+
+readCachedKey :: IO (Maybe T.Text)
+readCachedKey = do
+  exists <- doesFileExist siteCacheKeyPath
+  if not exists
+    then pure Nothing
+    else (Just <$> TIO.readFile siteCacheKeyPath) `catch` \(_ :: IOException) -> pure Nothing
+
+-- | Compile @site.hs@ (in the current directory) to
+--   'siteCacheBinaryPath', recording @cacheKey@ alongside it on
+--   success so the next 'ensureSiteCompiled' call can skip this step
+--   entirely if nothing relevant has changed.
+compileSite :: T.Text -> IO (Either String FilePath)
+compileSite cacheKey = do
+  mGhc <- findExecutable "ghc"
+  case mGhc of
+    Nothing -> pure $ Left "SARA: 'ghc' was not found on PATH — it ships with GHC, so this usually means GHC isn't installed or isn't on PATH."
+    Just ghcPath -> do
+      putStrLn "SARA: Compiling site.hs (first run, or site.hs changed since the last build)..."
+      (exitCode, _, errOutput) <- readProcessWithExitCode ghcPath
+        [ "-O0", "--make", "site.hs"
+        , "-o", siteCacheBinaryPath
+        , "-odir", siteCacheDir
+        , "-hidir", siteCacheDir
+        ] ""
+      case exitCode of
+        ExitSuccess -> do
+          TIO.writeFile siteCacheKeyPath cacheKey
+          pure (Right siteCacheBinaryPath)
+        ExitFailure _
+          | "Could not find module" `isInfixOf` errOutput && "SARA" `isInfixOf` errOutput ->
+              pure $ Left $ unlines
+                [ "SARA: The 'sara' library isn't visible to 'ghc' yet."
+                , "      Fix: run 'cabal install --lib .' from the SARA source tree (or 'cabal install --lib sara' once it's published), then retry."
+                ]
+          | otherwise ->
+              pure $ Left $ unlines
+                [ "SARA: site.hs failed to compile:"
+                , errOutput
+                ]
+
+-- | Run an already-compiled @site.hs@ binary, under the same bounded
+--   timeout and dry-run environment-variable handling the previous
+--   @runghc@-based implementation used.
+runCompiledSite :: FilePath -> Bool -> IO ()
+runCompiledSite binPath dryRun = do
+  baseEnv <- getEnvironment
+  let procEnv = if dryRun then ("SARA_DRY_RUN", "1") : baseEnv else baseEnv
+  (_, _, _, ph) <- createProcess
+    (proc binPath []) { std_in = NoStream, env = Just procEnv }
+  result <- timeout (120 * 1000000) (waitForProcess ph)
+  case result of
+    Nothing -> do
+      putStrLn "SARA: Timed out after 120s waiting for site.hs to build and run."
+      putStrLn "      This is likely a genuine issue in site.hs itself (e.g. an infinite loop), not a missing-package problem."
+      exitFailure
+    Just ExitSuccess -> pure ()
+    Just (ExitFailure code) -> do
+      putStrLn $ "SARA: site.hs exited with an error (exit code " ++ show code ++ ")."
+      exitFailure
 
 -- | The default build pipeline used by the CLI.
 --   Now includes automated Search Indexing and Asset discovery.
@@ -307,9 +364,17 @@ runCheck = do
     then runCustomSiteHs True
     else withArgs [] $ saraWithOptions Nothing True defaultSite
 
+runCacheKey :: IO ()
+runCacheKey = do
+  cwd <- getCurrentDirectory
+  key <- projectCacheKey cwd
+  TIO.putStrLn key
+
 commandParser :: Parser Command
 commandParser = subparser
-  (  command "build"  (info (Build . BuildOpts <$> switch (long "dry-run" <> help "Perform a dry run")) (progDesc "Build the site"))
+  (  command "build"  (info (Build <$> (BuildOpts <$> switch (long "dry-run" <> help "Perform a dry run")
+                                                    <*> switch (long "cache-key" <> help "Print a deterministic hash of the project's content/template tree and exit, without building. Suitable for use directly as a CI cache key.")))
+                            (progDesc "Build the site"))
   <> command "serve"  (info (Serve . ServeOpts <$> option auto (long "port" <> short 'p' <> value 8080 <> help "Port to serve on")) (progDesc "Start development server"))
   <> command "import" (info (Import <$> strArgument (metavar "PATH")) (progDesc "Import existing site"))
   <> command "new"    (info (New <$> optional (strArgument (metavar "NAME")) <*> optional (strOption (long "template" <> short 't' <> metavar "PATH" <> help "Template directory"))) (progDesc "Create new project"))

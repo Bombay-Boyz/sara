@@ -32,6 +32,7 @@ scaffoldProject root opts = do
   TIO.writeFile (root </> "templates" </> "post.html") sampleTemplate
   TIO.writeFile (root </> "posts" </> "hello-world.md") samplePost
   TIO.writeFile (root </> "assets" </> "search.js") searchJs
+  TIO.writeFile (root </> ".gitignore") generateGitignore
 
 -- | Scaffolds a project from a user-defined template directory.
 scaffoldFromTemplate :: FilePath -> FilePath -> ScaffoldOptions -> IO ()
@@ -53,6 +54,23 @@ scaffoldFromTemplate templatePath root opts = do
         if isDir
           then createDirectoryIfMissing True dstPath >> copyRecursive srcPath dstPath
           else copyFile srcPath dstPath
+
+-- | Build artifacts a real project shouldn't commit: rendered output,
+--   Shake's own build database, and — since the CLI's
+--   @runCustomSiteHs@ now compiles-and-caches @site.hs@ rather than
+--   re-interpreting it on every build (engineering roadmap item #1)
+--   — the compiled binary that caching keeps locally
+--   (@.sara/site-cache/@). That directory holds a machine-specific
+--   compiled artifact keyed by content hash, not something meant to
+--   be shared via version control; every machine (and CI run)
+--   regenerates it on its own first build.
+generateGitignore :: Text
+generateGitignore = T.unlines
+  [ "_site/"
+  , "_build/"
+  , ".shake/"
+  , ".sara/"
+  ]
 
 generateConfig :: ScaffoldOptions -> Text
 generateConfig opts = T.unlines
@@ -115,7 +133,7 @@ sampleTemplate = T.unlines
   , "  <meta charset=\"UTF-8\">"
   , "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
   , "  <meta name=\"view-transition\" content=\"same-origin\">"
-  , "  <title>{{ itemTitle }} | {{ siteTitle }}</title>"
+  , "  <title>{{ title }} | {{ siteTitle }}</title>"
   , "  <style>"
   , "    :root { --bg: #ffffff; --fg: #1a1a1a; --accent: #0070f3; --muted: #666; --border: #eee; --modal-bg: rgba(255,255,255,0.9); }"
   , "    @media (prefers-color-scheme: dark) { :root { --bg: #0f0f0f; --fg: #f5f5f5; --accent: #3291ff; --muted: #888; --border: #333; --modal-bg: rgba(15,15,15,0.9); } }"
@@ -203,13 +221,30 @@ searchJs = T.unlines
   , "    return;"
   , "  }"
   , "  const q = query.toLowerCase();"
-  , "  const results = [];"
-  , "  const docIds = new Set();"
+  , "  const totalDocs = Object.keys(searchIndex.documents).length;"
+  , "  const scores = new Map();"
+  , "  // Every index term matching the query contributes tf * idf to a"
+  , "  // document's score, aggregated across terms so a document"
+  , "  // matching multiple query-relevant terms outranks one matching"
+  , "  // only one -- the raw ingredient for this (per-term, per-document"
+  , "  // frequency) is exactly what SARA.Search.Index now stores,"
+  , "  // instead of the unordered document-ID sets it used to."
   , "  Object.keys(searchIndex.index).forEach(term => {"
-  , "    if (term.includes(q)) { searchIndex.index[term].forEach(id => docIds.add(id)); }"
+  , "    if (!term.includes(q)) return;"
+  , "    const postings = searchIndex.index[term];"
+  , "    const docCount = Object.keys(postings).length;"
+  , "    if (docCount === 0) return;"
+  , "    const idf = Math.log(totalDocs / docCount);"
+  , "    Object.keys(postings).forEach(docId => {"
+  , "      const tf = postings[docId];"
+  , "      scores.set(docId, (scores.get(docId) || 0) + tf * idf);"
+  , "    });"
   , "  });"
-  , "  docIds.forEach(id => { results.push(searchIndex.documents[id]); });"
-  , "  renderResults(results);"
+  , "  const ranked = Array.from(scores.entries())"
+  , "    .sort((a, b) => b[1] - a[1])"
+  , "    .slice(0, 20)"
+  , "    .map(([docId]) => searchIndex.documents[docId]);"
+  , "  renderResults(ranked);"
   , "}"
   , ""
   , "function renderResults(results) {"

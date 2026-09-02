@@ -12,7 +12,6 @@ import SARA.Security.PathGuard
 import SARA.Security.RegexGuard
 import SARA.Security.HtmlEscape
 import SARA.Frontmatter.Parser
-import SARA.Error
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Aeson as Aeson

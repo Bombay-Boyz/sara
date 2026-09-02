@@ -16,6 +16,7 @@ import System.CPUTime (getCPUTime)
 import Text.Printf (printf)
 import System.Environment (withArgs)
 import Control.Monad (forM_)
+import Control.Concurrent (getNumCapabilities)
 import qualified Data.HashSet as HS
 
 -- | Executes the SARA build engine using Shake — or, if
@@ -52,9 +53,42 @@ executeBuild env rules = do
   start <- getCPUTime
   
   let (ProjectRoot root) = envRoot env
+  -- Page rendering, image processing, and asset copying are almost
+  -- entirely independent per-file '%>' rules — an embarrassingly
+  -- parallel workload that previously ran on a single core, since
+  -- 'shakeThreads' defaults to 1 when unset.
+  --
+  -- 'shakeThreads = 0' is Shake's own documented value for "use all
+  -- available capabilities", but empirically (verified directly
+  -- against this project's installed shake-0.19.7, via a minimal
+  -- reproduction with a known, measurable expected speedup) it did
+  -- *not* enable parallel execution the way the documentation
+  -- describes, while an explicit positive thread count did, exactly
+  -- matching the expected speedup. Querying 'getNumCapabilities'
+  -- directly and passing that explicit count sidesteps whatever gap
+  -- exists between the documented and observed behavior of 0, while
+  -- still achieving the same "use all available cores" goal —
+  -- capped at a sane minimum of 1 for the pathological case of a
+  -- runtime somehow reporting zero capabilities.
+  --
+  -- This number is only meaningful with the threaded RTS active
+  -- (GHC's non-threaded runtime has exactly one capability no matter
+  -- what 'shakeThreads' requests) — see @sara.cabal@'s @ghc-options@
+  -- for the @-threaded -rtsopts "-with-rtsopts=-N"@ this depends on.
+  --
+  -- Verified safe to enable at all before making this change: every
+  -- cross-file dependency in this rule graph (search-index partials,
+  -- per-item source files, templates) goes through an explicit
+  -- 'need'/'needBlake3' — the mechanism Shake itself uses to
+  -- correctly serialize exactly where required while still running
+  -- independent targets concurrently — rather than any rule relying
+  -- on incidental ordering or shared mutable state outside Shake's
+  -- own tracking.
+  caps <- max 1 <$> getNumCapabilities
   let options = (shakeOptions 
         { shakeFiles = root </> "_build"
         , shakeVerbosity = Quiet
+        , shakeThreads = caps
         })
   
   -- Internal isolation: Shake never sees the CLI arguments

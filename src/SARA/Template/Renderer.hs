@@ -27,7 +27,7 @@ import SARA.Error (SaraError(..), SaraErrorKind(..), SaraBuildException(..))
 import Control.Exception (throwIO)
 
 newtype TemplateOracle = TemplateOracle FilePath
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Generic)
+  deriving (Show, Eq, Hashable, Binary, NFData, Generic)
 
 -- | We must store a serializable version in the Oracle result.
 --   Mustache.Template is not easily serializable/NFData.

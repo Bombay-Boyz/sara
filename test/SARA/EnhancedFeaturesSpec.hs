@@ -7,6 +7,7 @@ module SARA.EnhancedFeaturesSpec (spec) where
 import Test.Hspec
 import SARA
 import SARA.Monad
+import SARA.Internal.FrontmatterCache (loadFrontmatterCache)
 import SARA.Search.Index
 import SARA.Migration.Scaffold
 import qualified Data.Text as T
@@ -16,6 +17,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.FilePath ((</>))
 import Data.IORef
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import qualified Data.Text.IO as TIO
 import Control.Monad.Writer (runWriterT)
@@ -43,6 +45,7 @@ spec = do
         errorRef <- newIORef []
         let config = defaultConfig { cfgOutputDirectory = tmpDir </> "_site" }
         root <- mkProjectRoot tmpDir
+        frontmatterCache <- loadFrontmatterCache root
         
         let dsl = do
               remapMetadata [("fromKey", "toKey")]
@@ -52,7 +55,15 @@ spec = do
                 validateSEO item
 
         -- Step 1: Pass 1
-        let initialEnv = SaraEnv config root HS.empty [] errorRef
+        let initialEnv = SaraEnv
+              { envConfig = config
+              , envRoot = root
+              , envSiteGraph = HS.empty
+              , envRemapRules = []
+              , envAssetManifest = Map.empty
+              , envBuildIssues = errorRef
+              , envFrontmatterCache = frontmatterCache
+              }
         resPass1 <- runExceptT $ runWriterT $ runReaderT (unSaraM dsl) initialEnv
         case resPass1 of
           Right ((), rules) -> do

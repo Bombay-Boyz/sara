@@ -98,6 +98,17 @@ data SaraError (k :: SaraErrorKind) where
   TemplateUnsafeInterpolation
     :: { tplName :: !FilePath, tplLine :: !Int }
     -> SaraError 'EKTemplate
+  -- | A template references a field that the typed metadata record
+  --   it's being rendered against does not have — caught by
+  --   'SARA.DSL.renderTyped' before any rendering happens at all,
+  --   distinct from 'TemplateKeyMissing' (a key absent from the
+  --   *data* at render time, for the untyped 'SARA.DSL.render' path)
+  --   in that this is a mismatch the type system could see coming:
+  --   the field will never exist for *any* item of this metadata
+  --   type, not just this one. See 'SARA.Internal.TemplateCheck'.
+  TemplateUnknownField
+    :: { tplName :: !FilePath, tplFieldLine :: !Int, tplUnknownField :: !Text }
+    -> SaraError 'EKTemplate
 
   -- SEO errors
   SEOAltMissing
@@ -267,6 +278,7 @@ errorDetails = \case
   TemplateRenderFailure t d -> ("error", "E031", "Failed to render template " <> T.pack t <> ": " <> d, Nothing)
   TemplateKeyMissing t k -> ("error", "E032", "Missing key '" <> k <> "' in template: " <> T.pack t, Nothing)
   TemplateUnsafeInterpolation t ln -> ("error", "E033", "Unsafe raw interpolation detected in " <> T.pack t <> " at line " <> T.pack (show ln), Just (SourcePos t ln 0))
+  TemplateUnknownField t ln field -> ("error", "E034", "Template " <> T.pack t <> " references field '" <> field <> "' at line " <> T.pack (show ln) <> ", which the typed metadata record for this content does not have", Just (SourcePos t ln 0))
   SEOAltMissing _ pos src -> ("warning", "W001", "Missing alt attribute for image '" <> src <> "'", Just pos)
   SEOHeadingSkip _ pos from to -> ("warning", "W002", "Skipped heading level from " <> T.pack (show from) <> " to " <> T.pack (show to), Just pos)
   SEOTitleMissing f -> ("warning", "W003", "Missing title", Just (SourcePos f 0 0))
